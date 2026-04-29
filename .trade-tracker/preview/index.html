@@ -1,0 +1,1242 @@
+        <!doctype html>
+        <html lang="zh-CN">
+        <head>
+        <meta charset="utf-8">
+        <meta name="viewport" content="width=device-width, initial-scale=1">
+        <title>交易看板预览</title>
+        <link rel="stylesheet" href="resources/preview.css">
+        <script>
+        function parseSortableValue(text, sortType) {
+          const raw = (text || '').trim();
+          if (!raw || raw === '--') return NaN;
+          if (raw === '-') return NaN;
+          if (raw === '已回本') return 0;
+          if (sortType === 'date') {
+            const normalized = raw.replace(/\//g, '-');
+            const stamp = Date.parse(normalized);
+            return Number.isNaN(stamp) ? NaN : stamp;
+          }
+          if (sortType === 'number') {
+            const cleaned = raw
+              .replace(/人民币|港币|美元/g, '')
+              .replace(/,/g, '')
+              .replace(/%/g, '')
+              .trim();
+            const value = Number.parseFloat(cleaned);
+            return Number.isNaN(value) ? NaN : value;
+          }
+          return raw.toLowerCase();
+        }
+
+        const SUMMARY_CURRENCY_ORDER = ['人民币', '港币', '美元'];
+
+        function currencySortKey(label) {
+          const index = SUMMARY_CURRENCY_ORDER.indexOf(label);
+          return index === -1 ? 999 : index;
+        }
+
+        function orderedCurrencyEntries(map) {
+          return Object.entries(map).sort(([a], [b]) => {
+            const aKey = currencySortKey(a);
+            const bKey = currencySortKey(b);
+            if (aKey !== bKey) return aKey - bKey;
+            return String(a).localeCompare(String(b), 'zh-Hans-CN');
+          });
+        }
+
+        function addCurrencyValue(map, currency, value) {
+          if (!currency || Number.isNaN(value)) return;
+          map[currency] = (map[currency] || 0) + value;
+        }
+
+        function parseCurrencyCell(text) {
+          const raw = (text || '').trim();
+          if (!raw || raw === '--' || raw === '-') return null;
+          const match = raw.match(/^(人民币|港币|美元)\s+/);
+          const currency = match ? match[1] : '';
+          const value = parseSortableValue(raw, 'number');
+          if (Number.isNaN(value)) return null;
+          return { currency, value };
+        }
+
+        function formatMoneyTotals(map) {
+          const entries = orderedCurrencyEntries(map);
+          if (!entries.length) return '-';
+          return entries
+            .map(([currency, value]) => `${currency} ${Number(value).toLocaleString('en-US', { minimumFractionDigits: 2, maximumFractionDigits: 2 })}`)
+            .join(' / ');
+        }
+
+        function formatPercentTotals(map) {
+          const entries = orderedCurrencyEntries(map);
+          if (!entries.length) return '-';
+          return entries
+            .map(([currency, value]) => `${currency} ${(Number(value) * 100).toFixed(2)}%`)
+            .join(' / ');
+        }
+
+        function toneClassForLabel(label, text) {
+          if (!text || text === '-' || text === '--' || text === '已回本') return '';
+          if (label === '回本空间') return '';
+          if (!/(盈亏|收益|分红|年化)/.test(label)) return '';
+          const value = parseSortableValue(text, 'number');
+          if (Number.isNaN(value)) return '';
+          if (value > 0) return 'value-positive';
+          if (value < 0) return 'value-negative';
+          return 'value-zero';
+        }
+
+        function applySummaryTone(cell, label, text) {
+          cell.classList.remove('value-positive', 'value-negative', 'value-zero');
+          const tone = toneClassForLabel(label, text);
+          if (tone) cell.classList.add(tone);
+        }
+
+        function setSummaryCell(cell, label, text) {
+          cell.textContent = text;
+          applySummaryTone(cell, label, text);
+        }
+
+        function updateSummaryTable(table) {
+          const summaryKind = table.dataset.summaryKind || '';
+          if (!summaryKind) return;
+          const footerRow = table.querySelector('tfoot tr');
+          if (!footerRow) return;
+
+          const headerLabels = Array.from(table.querySelectorAll('thead th')).map((th) => (th.textContent || '').trim());
+          const footerCells = Array.from(footerRow.children);
+          const rows = Array.from(table.querySelectorAll('tbody tr')).filter((row) => row.style.display !== 'none');
+          const currencyIndex = headerLabels.indexOf('币种');
+          const yearIndex = headerLabels.indexOf('年份');
+          const sideIndex = headerLabels.indexOf('当前方向') >= 0 ? headerLabels.indexOf('当前方向') : headerLabels.indexOf('方向');
+          const holdingsCostIndex = headerLabels.indexOf('持仓成本');
+          const holdingsPnlIndex = headerLabels.indexOf('浮动盈亏');
+          const countLabels = new Set(['已平仓笔数', '交易笔数']);
+          const moneyLabels = new Set(['分红净额', '已实现盈亏', '持仓浮盈亏', '总盈亏', '最新市值', '当日盈亏', '持仓成本']);
+
+          if (!rows.length) {
+            footerCells.forEach((cell, index) => {
+              const label = headerLabels[index] || '';
+              setSummaryCell(cell, label, index === 0 ? '汇总' : '-');
+            });
+            return;
+          }
+
+          const currencies = new Set();
+          const years = new Set();
+          const sides = new Set();
+          const countTotals = {};
+          const moneyTotals = {};
+          const capitalTotals = {};
+          const capitalDayTotals = {};
+          const totalPnlTotals = {};
+          const holdingCostTotals = {};
+          const holdingPnlTotals = {};
+
+          rows.forEach((row) => {
+            const cells = Array.from(row.children);
+            const currency = currencyIndex >= 0 ? (cells[currencyIndex]?.textContent || '').trim() : '';
+            if (currency && currency !== '-') currencies.add(currency);
+            if (yearIndex >= 0) {
+              const year = (cells[yearIndex]?.textContent || '').trim();
+              if (year && year !== '-') years.add(year);
+            }
+            if (sideIndex >= 0) {
+              const side = (cells[sideIndex]?.textContent || '').trim();
+              if (side && side !== '-') sides.add(side);
+            }
+
+            headerLabels.forEach((label, index) => {
+              const text = (cells[index]?.textContent || '').trim();
+              if (countLabels.has(label)) {
+                const value = parseSortableValue(text, 'number');
+                if (!Number.isNaN(value)) countTotals[label] = (countTotals[label] || 0) + value;
+              }
+              if (moneyLabels.has(label)) {
+                const parsed = parseCurrencyCell(text);
+                if (parsed) {
+                  moneyTotals[label] = moneyTotals[label] || {};
+                  addCurrencyValue(moneyTotals[label], parsed.currency || currency, parsed.value);
+                }
+              }
+            });
+
+            if (summaryKind === 'stock' || summaryKind === 'annual') {
+              const capital = Number.parseFloat(row.dataset.capital || 'NaN');
+              const capitalDays = Number.parseFloat(row.dataset.capitalDays || 'NaN');
+              const totalPnl = Number.parseFloat(row.dataset.totalPnl || 'NaN');
+              if (currency && !Number.isNaN(capital)) addCurrencyValue(capitalTotals, currency, capital);
+              if (currency && !Number.isNaN(capitalDays)) addCurrencyValue(capitalDayTotals, currency, capitalDays);
+              if (currency && !Number.isNaN(totalPnl)) addCurrencyValue(totalPnlTotals, currency, totalPnl);
+            }
+
+            if (summaryKind === 'holdings') {
+              const costParsed = holdingsCostIndex >= 0 ? parseCurrencyCell(cells[holdingsCostIndex]?.textContent || '') : null;
+              const pnlParsed = holdingsPnlIndex >= 0 ? parseCurrencyCell(cells[holdingsPnlIndex]?.textContent || '') : null;
+              if (costParsed) addCurrencyValue(holdingCostTotals, costParsed.currency || currency, costParsed.value);
+              if (pnlParsed) addCurrencyValue(holdingPnlTotals, pnlParsed.currency || currency, pnlParsed.value);
+            }
+          });
+
+          footerCells.forEach((cell, index) => {
+            const label = headerLabels[index] || '';
+            let text = '-';
+
+            if (label === '代码') {
+              text = '汇总';
+            } else if (label === '名称') {
+              text = '共 ' + rows.length + ' 项';
+            } else if (label === '年份') {
+              text = years.size === 1 ? Array.from(years)[0] : '全部';
+            } else if (label === '币种') {
+              text = currencies.size === 1 ? Array.from(currencies)[0] : '多币种';
+            } else if (label === '当前方向' || label === '方向') {
+              text = sides.size === 1 ? Array.from(sides)[0] : '混合';
+            } else if (countLabels.has(label)) {
+              const value = countTotals[label];
+              text = Number.isFinite(value) ? Number(value).toLocaleString('en-US', { maximumFractionDigits: 0 }) : '-';
+            } else if (moneyLabels.has(label)) {
+              text = formatMoneyTotals(moneyTotals[label] || {});
+            } else if (label === '盈亏率' && summaryKind === 'holdings') {
+              const rateMap = {};
+              orderedCurrencyEntries(holdingCostTotals).forEach(([currency, cost]) => {
+                const pnl = holdingPnlTotals[currency] || 0;
+                if (cost) rateMap[currency] = pnl / cost;
+              });
+              text = formatPercentTotals(rateMap);
+            } else if ((label === '总收益率' || label === '综合年化') && (summaryKind === 'stock' || summaryKind === 'annual')) {
+              const rateMap = {};
+              orderedCurrencyEntries(totalPnlTotals).forEach(([currency, pnl]) => {
+                if (label === '总收益率') {
+                  const capital = capitalTotals[currency] || 0;
+                  if (capital) rateMap[currency] = pnl / capital;
+                } else {
+                  const capitalDays = capitalDayTotals[currency] || 0;
+                  if (capitalDays) rateMap[currency] = pnl * 365 / capitalDays;
+                }
+              });
+              text = formatPercentTotals(rateMap);
+            }
+
+            setSummaryCell(cell, label, text);
+          });
+        }
+
+        function updateSummaryTables() {
+          document.querySelectorAll('.summary-table[data-summary-kind]').forEach((table) => {
+            updateSummaryTable(table);
+          });
+        }
+
+        function attachSortableTables() {
+          document.querySelectorAll('.js-sortable-table').forEach((table) => {
+            const headers = Array.from(table.querySelectorAll('thead th'));
+            headers.forEach((header, index) => {
+              header.addEventListener('click', () => {
+                const tbody = table.querySelector('tbody');
+                const rows = Array.from(tbody.querySelectorAll('tr'));
+                const current = header.dataset.sortDirection === 'asc' ? 'desc' : 'asc';
+                headers.forEach((item) => {
+                  item.dataset.sortDirection = '';
+                  item.classList.remove('sort-asc', 'sort-desc');
+                });
+                header.dataset.sortDirection = current;
+                header.classList.add(current === 'asc' ? 'sort-asc' : 'sort-desc');
+                const sortType = header.dataset.sortType || 'text';
+                rows.sort((a, b) => {
+                  const aText = a.children[index]?.textContent || '';
+                  const bText = b.children[index]?.textContent || '';
+                  const aValue = parseSortableValue(aText, sortType);
+                  const bValue = parseSortableValue(bText, sortType);
+                  if (typeof aValue === 'string' || typeof bValue === 'string') {
+                    return current === 'asc'
+                      ? String(aValue).localeCompare(String(bValue), 'zh-Hans-CN')
+                      : String(bValue).localeCompare(String(aValue), 'zh-Hans-CN');
+                  }
+                  const aRank = Number.isNaN(aValue) ? (current === 'asc' ? Number.POSITIVE_INFINITY : Number.NEGATIVE_INFINITY) : aValue;
+                  const bRank = Number.isNaN(bValue) ? (current === 'asc' ? Number.POSITIVE_INFINITY : Number.NEGATIVE_INFINITY) : bValue;
+                  return current === 'asc' ? aRank - bRank : bRank - aRank;
+                });
+                rows.forEach((row) => tbody.appendChild(row));
+                updateSummaryTable(table);
+              });
+            });
+          });
+        }
+
+        function attachYearFilters() {
+          document.querySelectorAll('.js-year-filter').forEach((select) => {
+            const tableClass = select.dataset.targetTable;
+            if (!tableClass) return;
+            const table = document.querySelector(`.${tableClass}`);
+            if (!table) return;
+            const rows = Array.from(table.querySelectorAll('tbody tr'));
+
+            const applyFilter = () => {
+              const selectedYear = select.value;
+              rows.forEach((row) => {
+                const rowYear = row.dataset.year || '';
+                row.style.display = selectedYear === 'all' || rowYear === selectedYear ? '' : 'none';
+              });
+              updateSummaryTable(table);
+            };
+
+            select.addEventListener('change', applyFilter);
+            applyFilter();
+          });
+        }
+
+        window.addEventListener('DOMContentLoaded', () => {
+          attachSortableTables();
+          attachYearFilters();
+          updateSummaryTables();
+        });
+        </script>
+        </head>
+        <body>
+        <div class="index-page">
+          <div class="index-card">
+            <h1 class="index-title">交易看板预览</h1>
+            <p class="index-text">生成自 Trade Tracker.xlsx。首页会集中展示当前持仓、未平仓期权和按时间排序的交易时间线；下面各个大板块都可以单独折叠。</p>
+          </div>
+
+        <style>
+        .refresh-panel {
+          margin: 18px 0 20px;
+          padding: 18px;
+          border: 1px solid rgba(196, 215, 202, 0.92);
+          border-radius: 24px;
+          background:
+            radial-gradient(circle at 90% 12%, rgba(251, 188, 4, 0.20), transparent 110px),
+            linear-gradient(135deg, rgba(255, 255, 255, 0.98), rgba(239, 248, 241, 0.97));
+          box-shadow: 0 18px 42px rgba(60, 64, 67, 0.08);
+        }
+
+        .refresh-panel-head {
+          display: flex;
+          align-items: flex-start;
+          justify-content: space-between;
+          gap: 18px;
+        }
+
+        .refresh-kicker {
+          margin: 0 0 5px;
+          color: #137333;
+          font-size: 12px;
+          font-weight: 800;
+          letter-spacing: 0.08em;
+        }
+
+        .refresh-panel h2 {
+          margin: 0 0 6px;
+          color: #202124;
+          font-size: 22px;
+          line-height: 1.18;
+          letter-spacing: -0.035em;
+        }
+
+        .refresh-panel p {
+          margin: 0;
+          color: #5f6f63;
+          font-size: 13px;
+          line-height: 1.55;
+        }
+
+        .refresh-button {
+          flex: 0 0 auto;
+          border: 0;
+          border-radius: 999px;
+          padding: 10px 16px;
+          color: #fff;
+          background: linear-gradient(135deg, #137333, #34a853);
+          box-shadow: 0 10px 24px rgba(19, 115, 51, 0.22);
+          font-size: 13px;
+          font-weight: 800;
+          cursor: pointer;
+        }
+
+        .refresh-button:disabled {
+          color: #7a867d;
+          background: #dfe8e2;
+          box-shadow: none;
+          cursor: not-allowed;
+        }
+
+        .refresh-status-line {
+          display: flex;
+          align-items: center;
+          justify-content: space-between;
+          gap: 12px;
+          margin-top: 16px;
+          color: #466052;
+          font-size: 12px;
+          font-weight: 800;
+        }
+
+        .refresh-state {
+          display: inline-flex;
+          align-items: center;
+          gap: 8px;
+        }
+
+        .refresh-state::before {
+          content: "";
+          width: 8px;
+          height: 8px;
+          border-radius: 999px;
+          background: #fbbc04;
+          box-shadow: 0 0 0 4px rgba(251, 188, 4, 0.16);
+        }
+
+        .refresh-panel.is-ready .refresh-state::before,
+        .refresh-panel.is-done .refresh-state::before {
+          background: #34a853;
+          box-shadow: 0 0 0 4px rgba(52, 168, 83, 0.16);
+        }
+
+        .refresh-panel.is-error .refresh-state::before {
+          background: #d93025;
+          box-shadow: 0 0 0 4px rgba(217, 48, 37, 0.14);
+        }
+
+        .refresh-progress {
+          height: 10px;
+          margin-top: 8px;
+          overflow: hidden;
+          border-radius: 999px;
+          background: #dfeae3;
+        }
+
+        .refresh-progress span {
+          display: block;
+          width: 0%;
+          height: 100%;
+          border-radius: inherit;
+          background: linear-gradient(90deg, #34a853, #fbbc04);
+          transition: width 220ms ease;
+        }
+
+        .refresh-steps {
+          display: grid;
+          gap: 8px;
+          max-height: 190px;
+          margin: 14px 0 0;
+          padding: 0;
+          overflow: auto;
+          list-style: none;
+        }
+
+        .refresh-step {
+          display: grid;
+          grid-template-columns: minmax(96px, max-content) 1fr;
+          gap: 12px;
+          padding: 9px 11px;
+          border: 1px solid rgba(196, 215, 202, 0.72);
+          border-radius: 15px;
+          background: rgba(255, 255, 255, 0.64);
+          color: #5f6368;
+          font-size: 12px;
+        }
+
+        .refresh-step strong {
+          color: #202124;
+          font-weight: 800;
+        }
+
+        .refresh-step.is-current {
+          border-color: rgba(52, 168, 83, 0.44);
+          background: rgba(232, 245, 233, 0.80);
+        }
+
+        .refresh-step.is-error {
+          border-color: rgba(217, 48, 37, 0.24);
+          background: rgba(252, 232, 230, 0.62);
+        }
+
+        .refresh-step.is-muted {
+          color: #6f7d73;
+        }
+
+        @media (max-width: 760px) {
+          .refresh-panel-head {
+            display: grid;
+          }
+
+          .refresh-button {
+            width: 100%;
+          }
+
+          .refresh-step {
+            grid-template-columns: 1fr;
+            gap: 4px;
+          }
+        }
+        </style>
+
+          <section class="refresh-panel" id="refresh-panel" aria-live="polite">
+            <div class="refresh-panel-head">
+              <div>
+                <p class="refresh-kicker">本地刷新</p>
+                <h2>刷新看板</h2>
+                <p>重新读取工作簿、更新行情、计算汇总并重建网页；下面会显示现在具体在等什么。</p>
+              </div>
+              <button class="refresh-button" type="button" data-refresh-start>刷新看板</button>
+            </div>
+            <div class="refresh-status-line">
+              <span class="refresh-state" data-refresh-state>检测刷新服务</span>
+              <span class="refresh-percent" data-refresh-percent>0%</span>
+            </div>
+            <div class="refresh-progress" role="progressbar" aria-valuemin="0" aria-valuemax="100" aria-valuenow="0">
+              <span data-refresh-bar></span>
+            </div>
+            <ol class="refresh-steps" data-refresh-steps>
+              <li class="refresh-step is-muted">
+                <strong>等待操作</strong>
+                <span>双击 Update Preview.command 打开后，可以在这里直接刷新。</span>
+              </li>
+            </ol>
+          </section>
+        <details class="dashboard-section section-collapsible" open>
+          <summary class="section-summary">
+            <div class="section-head">
+              <div>
+                <h2 class="section-title">总体概览</h2>
+                <p class="section-note">这里先把最关键的统计放在一起，后面的板块都可以单独收起或展开。</p>
+              </div>
+              <span class="section-toggle" aria-hidden="true"></span>
+            </div>
+          </summary>
+          <div class="section-body">
+            <div class="dashboard-grid">
+<div class="metric-card metric-card-hero">
+    <div class="metric-label">总盈亏</div>
+    <div class="metric-value metric-value-wide"><span class="metric-segment">暂无总盈亏</span></div>
+    <div class="metric-note">已实现盈亏与持仓浮盈亏合并展示。</div>
+  </div>
+<div class="metric-card metric-card-return">
+    <div class="metric-label">总收益率</div>
+    <div class="metric-value metric-value-wide"><span class="metric-segment">暂无可计算收益率</span></div>
+    <div class="metric-note">按已录入交易的资金占用口径估算。</div>
+  </div>
+<div class="metric-card metric-card-annual">
+    <div class="metric-label">综合年化</div>
+    <div class="metric-value metric-value-wide"><span class="metric-segment">暂无可计算年化</span></div>
+    <div class="metric-note">按资金占用天数折算。</div>
+  </div>
+<div class="metric-card metric-card-broad">
+    <div class="metric-label">当前市值</div>
+    <div class="metric-value metric-value-wide"><span class="metric-segment">暂无可用行情</span></div>
+    <div class="metric-note">空头按负值计入净敞口；现价按刷新时在线拉取。</div>
+  </div>
+<div class="metric-card metric-card-broad">
+    <div class="metric-label">持仓成本</div>
+    <div class="metric-value metric-value-wide"><span class="metric-segment">暂无未平仓现股</span></div>
+    <div class="metric-note">仅统计当前仍未平仓的现股记录，已含手续费。</div>
+  </div>
+<div class="metric-card metric-card-broad">
+    <div class="metric-label">持仓浮盈亏</div>
+    <div class="metric-value metric-value-wide"><span class="metric-segment">暂无持仓浮盈亏</span></div>
+    <div class="metric-note">仅统计当前持仓，未平仓期权暂未做实时估值。</div>
+  </div>
+<div class="metric-card metric-card-broad">
+    <div class="metric-label">持仓当日盈亏</div>
+    <div class="metric-value metric-value-wide"><span class="metric-segment">暂无当日盈亏</span></div>
+    <div class="metric-note">按现价相对昨收估算；空头方向已反向计算。</div>
+  </div>
+<div class="metric-card metric-card-broad">
+    <div class="metric-label">已实现盈亏</div>
+    <div class="metric-value metric-value-wide"><span class="metric-segment">暂无已实现盈亏</span></div>
+    <div class="metric-note">已平仓交易按工作簿里的开平价格汇总，并计入源账户里的分红净额。</div>
+  </div>
+<div class="metric-card metric-card-mini">
+    <div class="metric-label">当前持仓标的</div>
+    <div class="metric-value">0</div>
+    <div class="metric-note">按工作簿中仍未平仓的现股记录汇总。</div>
+  </div>
+<div class="metric-card metric-card-mini">
+    <div class="metric-label">未平仓期权腿</div>
+    <div class="metric-value">0</div>
+    <div class="metric-note">方便你快速查看像小米备兑这类即将到期的单子。</div>
+  </div>
+<div class="metric-card metric-card-mini">
+    <div class="metric-label">最近交易日期</div>
+    <div class="metric-value">--</div>
+    <div class="metric-note">按主表中最后一笔有日期的记录统计。</div>
+  </div>
+<div class="metric-card metric-card-mini">
+    <div class="metric-label">行情刷新日期</div>
+    <div class="metric-value">2026-04-29</div>
+    <div class="metric-note">重新双击刷新脚本后，这里的现价会一起更新。</div>
+  </div>
+</div>
+
+          </div>
+        </details>
+
+<details class="dashboard-section section-collapsible" open>
+  <summary class="section-summary">
+    <div class="section-head">
+      <div>
+        <h2 class="section-title">总收益曲线</h2>
+        <p class="section-note">这里按币种分别画累计收益曲线：已平仓交易按平仓日计入，当前持仓的浮盈亏统一落在今天这一个点。未平仓期权暂未计入实时估值。</p>
+      </div>
+      <span class="section-toggle" aria-hidden="true"></span>
+    </div>
+  </summary>
+  <div class="section-body">
+    <div class="empty-state">当前还没有足够的数据可画收益曲线。</div>
+  </div>
+</details>
+
+<details class="dashboard-section section-collapsible" open>
+  <summary class="section-summary">
+    <div class="section-head">
+      <div>
+        <h2 class="section-title">当前持仓</h2>
+        <p class="section-note">这里只统计已经录入主表、且当前仍未平仓的现股仓位；个股仓位按实时汇率折成人民币口径计算，并按仓位绝对值从大到小排序。空头仓位会标成“空头”，数量和最新市值会按负值展示；回本空间这一列对多头显示还需上涨多少，对空头显示还需下跌多少。</p>
+      </div>
+      <span class="section-toggle" aria-hidden="true"></span>
+    </div>
+  </summary>
+  <div class="section-body">
+    <div class="empty-state">当前还没有已录入的未平仓现股持仓。</div>
+  </div>
+</details>
+
+<details class="dashboard-section section-collapsible" open>
+  <summary class="section-summary">
+    <div class="section-head">
+      <div>
+        <h2 class="section-title">未平仓期权</h2>
+        <p class="section-note">只要期权那一行还没有平仓价，就会继续留在这里，方便你盯到期日。</p>
+      </div>
+      <span class="section-toggle" aria-hidden="true"></span>
+    </div>
+  </summary>
+  <div class="section-body">
+    <div class="empty-state">当前还没有已录入的未平仓期权。</div>
+  </div>
+</details>
+
+<details class="dashboard-section section-collapsible" open>
+  <summary class="section-summary">
+    <div class="section-head">
+      <div>
+        <h2 class="section-title">分年度个股汇总</h2>
+        <p class="section-note">这里按年份拆分个股表现；分红按实际到账年份归属。你可以先选年份，再点表头按收益率、年化等字段排序。</p>
+      </div>
+      <span class="section-toggle" aria-hidden="true"></span>
+    </div>
+  </summary>
+  <div class="section-body">
+    <div class="empty-state">当前还没有可展示的年度个股汇总。</div>
+  </div>
+</details>
+<details class="dashboard-section section-collapsible" open>
+  <summary class="section-summary">
+    <div class="section-head">
+      <div>
+        <h2 class="section-title">交易时间线</h2>
+        <p class="section-note">这里按交易日期从新到旧展示，并把逐笔占用本金、盈亏、天数、收益率和年化一起算出来，方便你直接在网页里查账。</p>
+      </div>
+      <span class="section-toggle" aria-hidden="true"></span>
+    </div>
+  </summary>
+  <div class="section-body">
+    <div class="empty-state">当前没有可展示的交易记录。</div>
+  </div>
+</details>
+
+        <script>
+        (function setupRefreshPanel() {
+          const panel = document.getElementById('refresh-panel');
+          if (!panel) return;
+
+          const button = panel.querySelector('[data-refresh-start]');
+          const state = panel.querySelector('[data-refresh-state]');
+          const percent = panel.querySelector('[data-refresh-percent]');
+          const bar = panel.querySelector('[data-refresh-bar]');
+          const progress = panel.querySelector('.refresh-progress');
+          const steps = panel.querySelector('[data-refresh-steps]');
+          const localServer = 'http://127.0.0.1:8765';
+          const apiBase = window.location.protocol === 'file:' ? localServer : '';
+          let isRefreshing = false;
+
+          function setStatus(text, tone) {
+            state.textContent = text;
+            panel.classList.remove('is-ready', 'is-running', 'is-done', 'is-error');
+            if (tone) panel.classList.add(tone);
+          }
+
+          function setProgress(value) {
+            const next = Math.max(0, Math.min(100, Number(value) || 0));
+            percent.textContent = `${Math.round(next)}%`;
+            bar.style.width = `${next}%`;
+            progress.setAttribute('aria-valuenow', String(Math.round(next)));
+          }
+
+          function resetSteps() {
+            steps.innerHTML = '';
+          }
+
+          function addStep(step, detail, tone) {
+            steps.querySelectorAll('.is-current').forEach((item) => item.classList.remove('is-current'));
+            const item = document.createElement('li');
+            item.className = `refresh-step ${tone || 'is-current'}`;
+            const title = document.createElement('strong');
+            const body = document.createElement('span');
+            title.textContent = step || '处理中';
+            body.textContent = detail || '继续等待当前步骤完成。';
+            item.append(title, body);
+            steps.appendChild(item);
+            while (steps.children.length > 26) {
+              steps.firstElementChild.remove();
+            }
+            steps.scrollTop = steps.scrollHeight;
+          }
+
+          async function checkRefreshService() {
+            button.disabled = true;
+            setStatus('检测刷新服务', 'is-running');
+            setProgress(0);
+
+            if (!window.EventSource) {
+              setStatus('浏览器不支持实时刷新', 'is-error');
+              addStep('无法刷新', '当前浏览器不支持 EventSource，可以继续用 Update Preview.command 刷新。', 'is-error');
+              return;
+            }
+
+            try {
+              const response = await fetch(`${apiBase}/api/ping?ts=${Date.now()}`, { cache: 'no-store' });
+              if (!response.ok) throw new Error(`HTTP ${response.status}`);
+              button.disabled = false;
+              setStatus('准备就绪', 'is-ready');
+              addStep('刷新服务已连接', '点“刷新看板”后会实时显示每一步进度。', 'is-muted');
+            } catch (_error) {
+              setStatus('需要启动本地刷新服务', 'is-error');
+              addStep('服务未连接', '请双击主目录里的 Update Preview.command，再从打开的网页刷新。', 'is-error');
+            }
+          }
+
+          function reloadPreview(target) {
+            setTimeout(() => {
+              if (window.location.protocol === 'file:') {
+                const base = window.location.href.split('#')[0].split('?')[0];
+                window.location.replace(`${base}?ts=${Date.now()}`);
+              } else {
+                window.location.replace(target || `/preview/index.html?ts=${Date.now()}`);
+              }
+            }, 900);
+          }
+
+          button.addEventListener('click', () => {
+            if (isRefreshing) return;
+            isRefreshing = true;
+            button.disabled = true;
+            resetSteps();
+            setProgress(1);
+            setStatus('刷新中', 'is-running');
+            addStep('开始刷新', '正在连接本地生成器。');
+
+            let finished = false;
+            const source = new EventSource(`${apiBase}/api/refresh?ts=${Date.now()}`);
+
+            source.addEventListener('progress', (event) => {
+              const payload = JSON.parse(event.data || '{}');
+              setStatus(payload.step || '刷新中', 'is-running');
+              if (payload.percent !== undefined) setProgress(payload.percent);
+              addStep(payload.step, payload.detail);
+            });
+
+            source.addEventListener('log', (event) => {
+              const payload = JSON.parse(event.data || '{}');
+              if (payload.line) addStep('生成器输出', payload.line, 'is-muted');
+            });
+
+            source.addEventListener('done', (event) => {
+              const payload = JSON.parse(event.data || '{}');
+              finished = true;
+              source.close();
+              setProgress(100);
+              setStatus('刷新完成，正在重载页面', 'is-done');
+              addStep(payload.step || '完成', payload.detail || '页面已重新生成。', 'is-muted');
+              reloadPreview(payload.reload);
+            });
+
+            source.addEventListener('error', (event) => {
+              if (finished) return;
+              let payload = {};
+              try {
+                payload = JSON.parse(event.data || '{}');
+              } catch (_error) {
+                payload = {};
+              }
+              finished = true;
+              source.close();
+              isRefreshing = false;
+              button.disabled = false;
+              setStatus('刷新失败', 'is-error');
+              addStep(payload.step || '刷新失败', payload.detail || '连接断开或生成器报错。', 'is-error');
+            });
+
+            source.onerror = () => {
+              if (finished) return;
+              finished = true;
+              source.close();
+              isRefreshing = false;
+              button.disabled = false;
+              setStatus('刷新失败', 'is-error');
+              addStep('连接中断', '本地刷新服务没有返回完成信号，可以看一下命令窗口里的错误。', 'is-error');
+            };
+          });
+
+          if (document.readyState === 'loading') {
+            document.addEventListener('DOMContentLoaded', checkRefreshService);
+          } else {
+            checkRefreshService();
+          }
+        })();
+        </script>
+
+        <script>
+        function tableHeaderCells(table) {
+          return Array.from(table.querySelectorAll('thead th'));
+        }
+
+        function tableHeaderLabels(table) {
+          return tableHeaderCells(table).map((th) => (th.textContent || '').trim());
+        }
+
+        function sortedCurrencyLabels(labels) {
+          const map = {};
+          labels.forEach((label) => {
+            if (label && label !== '-') map[label] = 0;
+          });
+          return orderedCurrencyEntries(map).map(([currency]) => currency);
+        }
+
+        function formatSingleMoney(currency, value) {
+          if (!currency || !Number.isFinite(value)) return '-';
+          return Number(value).toLocaleString('en-US', { minimumFractionDigits: 2, maximumFractionDigits: 2 });
+        }
+
+        function formatSinglePercent(value) {
+          if (!Number.isFinite(value)) return '-';
+          return `${(Number(value) * 100).toFixed(2)}%`;
+        }
+
+        function footerCellClassForHeader(header) {
+          const classes = Array.from(header.classList).filter((name) => !name.startsWith('sort-'));
+          return classes.length ? classes.join(' ') : 'text';
+        }
+
+        function replaceSummaryFooterRows(table, headerLabels, rowsByCurrency, statsByCurrency) {
+          let tfoot = table.querySelector('tfoot');
+          if (!tfoot) {
+            tfoot = document.createElement('tfoot');
+            table.appendChild(tfoot);
+          }
+          tfoot.innerHTML = '';
+          const headers = tableHeaderCells(table);
+          const currencies = sortedCurrencyLabels(Object.keys(rowsByCurrency));
+          if (!currencies.length) {
+            const row = document.createElement('tr');
+            row.className = 'summary-footer';
+            headerLabels.forEach((label, index) => {
+              const cell = document.createElement('td');
+              cell.className = footerCellClassForHeader(headers[index]);
+              setSummaryCell(cell, label, index === 0 ? '汇总' : '-');
+              row.appendChild(cell);
+            });
+            tfoot.appendChild(row);
+            return;
+          }
+
+          currencies.forEach((currency) => {
+            const stats = statsByCurrency[currency];
+            const row = document.createElement('tr');
+            row.className = 'summary-footer';
+            headerLabels.forEach((label, index) => {
+              const cell = document.createElement('td');
+              cell.className = footerCellClassForHeader(headers[index]);
+              let text = '-';
+
+              if ((label === '代码' || label === '年份' || label === '最后清仓时间') && index === 0) {
+                text = '汇总';
+              } else if (label === '名称') {
+                text = '-';
+              } else if (label === '币种') {
+                text = currency;
+              } else if (label === '当前方向' || label === '方向') {
+                text = stats.sides.size === 1 ? Array.from(stats.sides)[0] : '混合';
+              } else if (label === '年份') {
+                text = stats.years.size === 1 ? Array.from(stats.years)[0] : '全部';
+              } else if (stats.countLabels.has(label)) {
+                const value = stats.countTotals[label];
+                text = Number.isFinite(value) ? Number(value).toLocaleString('en-US', { maximumFractionDigits: 0 }) : '-';
+              } else if (stats.moneyLabels.has(label)) {
+                text = formatSingleMoney(currency, stats.moneyTotals[label]);
+              } else if (label === '盈亏率' && stats.summaryKind === 'holdings') {
+                text = stats.holdingCost ? formatSinglePercent(stats.holdingPnl / stats.holdingCost) : '-';
+              } else if (label === '个股仓位' && stats.summaryKind === 'holdings') {
+                text = stats.positionWeight ? formatSinglePercent(stats.positionWeight) : '-';
+              } else if ((label === '总收益率' || label === '综合年化') && (stats.summaryKind === 'stock' || stats.summaryKind === 'annual')) {
+                if (label === '总收益率') {
+                  text = stats.capital ? formatSinglePercent(stats.totalPnl / stats.capital) : '-';
+                } else {
+                  text = stats.capitalDays ? formatSinglePercent(stats.totalPnl * 365 / stats.capitalDays) : '-';
+                }
+              }
+
+              setSummaryCell(cell, label, text);
+              row.appendChild(cell);
+            });
+            tfoot.appendChild(row);
+          });
+        }
+
+        function updateSummaryTable(table) {
+          const summaryKind = table.dataset.summaryKind || '';
+          if (!summaryKind) return;
+          const headerLabels = tableHeaderLabels(table);
+          const rows = Array.from(table.querySelectorAll('tbody tr')).filter((row) => row.style.display !== 'none');
+          const currencyIndex = headerLabels.indexOf('币种');
+          const yearIndex = headerLabels.indexOf('年份');
+          const sideIndex = headerLabels.indexOf('当前方向') >= 0 ? headerLabels.indexOf('当前方向') : headerLabels.indexOf('方向');
+          const holdingsCostIndex = headerLabels.indexOf('持仓成本');
+          const holdingsPnlIndex = headerLabels.indexOf('浮动盈亏');
+          const holdingsWeightIndex = headerLabels.indexOf('个股仓位');
+          const countLabels = new Set(['已平仓笔数', '交易笔数']);
+          const moneyLabels = new Set(['分红净额', '已实现盈亏', '浮动盈亏', '持仓浮盈亏', '总盈亏', '最新市值', '当日盈亏', '持仓成本']);
+          const rowsByCurrency = {};
+          const statsByCurrency = {};
+
+          const ensureStats = (currency) => {
+            const label = currency || '未标注币种';
+            if (!rowsByCurrency[label]) rowsByCurrency[label] = [];
+            if (!statsByCurrency[label]) {
+              statsByCurrency[label] = {
+                summaryKind,
+                countLabels,
+                moneyLabels,
+                rows: rowsByCurrency[label],
+                years: new Set(),
+                sides: new Set(),
+                countTotals: {},
+                moneyTotals: {},
+                capital: 0,
+                capitalDays: 0,
+                totalPnl: 0,
+                holdingCost: 0,
+                holdingPnl: 0,
+                positionWeight: 0,
+              };
+            }
+            return statsByCurrency[label];
+          };
+
+          rows.forEach((row) => {
+            const cells = Array.from(row.children);
+            const currency = currencyIndex >= 0 ? (cells[currencyIndex]?.textContent || '').trim() : '';
+            const stats = ensureStats(currency);
+            rowsByCurrency[currency || '未标注币种'].push(row);
+
+            if (yearIndex >= 0) {
+              const year = (cells[yearIndex]?.textContent || '').trim();
+              if (year && year !== '-') stats.years.add(year);
+            }
+            if (sideIndex >= 0) {
+              const side = (cells[sideIndex]?.textContent || '').trim();
+              if (side && side !== '-') stats.sides.add(side);
+            }
+
+            headerLabels.forEach((label, index) => {
+              const text = (cells[index]?.textContent || '').trim();
+              if (countLabels.has(label)) {
+                const value = parseSortableValue(text, 'number');
+                if (!Number.isNaN(value)) stats.countTotals[label] = (stats.countTotals[label] || 0) + value;
+              }
+              if (moneyLabels.has(label)) {
+                const parsed = parseCurrencyCell(text);
+                if (parsed) stats.moneyTotals[label] = (stats.moneyTotals[label] || 0) + parsed.value;
+              }
+            });
+
+            if (summaryKind === 'stock' || summaryKind === 'annual') {
+              const capital = Number.parseFloat(row.dataset.capital || 'NaN');
+              const capitalDays = Number.parseFloat(row.dataset.capitalDays || 'NaN');
+              const totalPnl = Number.parseFloat(row.dataset.totalPnl || 'NaN');
+              if (!Number.isNaN(capital)) stats.capital += capital;
+              if (!Number.isNaN(capitalDays)) stats.capitalDays += capitalDays;
+              if (!Number.isNaN(totalPnl)) stats.totalPnl += totalPnl;
+            }
+
+            if (summaryKind === 'holdings') {
+              const costParsed = holdingsCostIndex >= 0 ? parseCurrencyCell(cells[holdingsCostIndex]?.textContent || '') : null;
+              const pnlParsed = holdingsPnlIndex >= 0 ? parseCurrencyCell(cells[holdingsPnlIndex]?.textContent || '') : null;
+              const weightCell = holdingsWeightIndex >= 0 ? cells[holdingsWeightIndex] : null;
+              const weight = weightCell ? Number.parseFloat(weightCell.dataset.sortValue ?? 'NaN') : NaN;
+              if (costParsed) stats.holdingCost += costParsed.value;
+              if (pnlParsed) stats.holdingPnl += pnlParsed.value;
+              if (!Number.isNaN(weight)) stats.positionWeight += weight;
+            }
+          });
+
+          replaceSummaryFooterRows(table, headerLabels, rowsByCurrency, statsByCurrency);
+        }
+
+        function balanceSummaryTableWidths() {
+          document.querySelectorAll('.summary-wrap').forEach((wrap) => {
+            const table = wrap.querySelector('.summary-table');
+            if (!table) return;
+            table.classList.remove('fit-width');
+            table.style.removeProperty('width');
+            const naturalWidth = table.scrollWidth;
+            const availableWidth = wrap.clientWidth;
+            if (naturalWidth > 0 && naturalWidth <= availableWidth + 1) {
+              table.classList.add('fit-width');
+            }
+          });
+        }
+
+        function refreshSummaryTablesAndWidths() {
+          if (typeof updateSummaryTables === 'function') updateSummaryTables();
+          requestAnimationFrame(balanceSummaryTableWidths);
+        }
+
+        function refineAnnualYearFilter() {
+          const select = document.querySelector('.js-year-filter[data-target-table="annual-summary-table"]');
+          const table = document.querySelector('.annual-summary-table');
+          if (!select || !table) return;
+          const rows = Array.from(table.querySelectorAll('tbody tr'));
+          const applyRefinement = () => {
+            if (select.value === 'all') {
+              rows.forEach((row) => {
+                if ((row.dataset.year || '') === 'total') row.style.display = 'none';
+              });
+            }
+            if (typeof updateSummaryTable === 'function') updateSummaryTable(table);
+            requestAnimationFrame(balanceSummaryTableWidths);
+          };
+          select.addEventListener('change', applyRefinement);
+          applyRefinement();
+        }
+
+        window.addEventListener('load', refreshSummaryTablesAndWidths);
+        window.addEventListener('resize', balanceSummaryTableWidths);
+        document.addEventListener('DOMContentLoaded', () => {
+          refineAnnualYearFilter();
+          refreshSummaryTablesAndWidths();
+        });
+        if (document.readyState !== 'loading') {
+          refineAnnualYearFilter();
+          refreshSummaryTablesAndWidths();
+        }
+        </script>
+
+        <script>
+        /* Codex summary CNY settlement footer */
+        (function addSummarySettlementRows() {
+          const fxRatesToCny = {"人民币": 1.0, "港币": 0.8714, "美元": 6.8328};
+          const moneyLabels = new Set(['分红净额', '已实现盈亏', '浮动盈亏', '持仓浮盈亏', '总盈亏', '最新市值', '当日盈亏', '持仓成本']);
+          const toneLabels = new Set(['分红净额', '已实现盈亏', '浮动盈亏', '持仓浮盈亏', '总盈亏', '当日盈亏', '盈亏率', '总收益率', '综合年化']);
+
+          function numberFromText(text) {
+            const cleaned = String(text || '').replace(/,/g, '').replace(/%/g, '').replace(/^(人民币|港币|美元)\s+/, '').trim();
+            if (!cleaned || cleaned === '-' || cleaned === '--') return null;
+            const value = Number(cleaned);
+            return Number.isFinite(value) ? value : null;
+          }
+
+          function formatNumber(value) {
+            if (!Number.isFinite(value)) return '-';
+            return value.toLocaleString('zh-CN', { minimumFractionDigits: 2, maximumFractionDigits: 2 });
+          }
+
+          function formatPercent(value) {
+            if (!Number.isFinite(value)) return '-';
+            return `${(value * 100).toFixed(2)}%`;
+          }
+
+          function classForValue(label, value, baseClass) {
+            const classes = [baseClass || 'text'];
+            if (toneLabels.has(label) && Number.isFinite(value)) {
+              if (value > 0) classes.push('value-positive');
+              else if (value < 0) classes.push('value-negative');
+              else classes.push('value-zero');
+            }
+            return classes.join(' ');
+          }
+
+          function blankStats(summaryKind) {
+            return { summaryKind, count: 0, money: {}, capital: 0, capitalDays: 0 };
+          }
+
+          function addMoney(stats, label, value, rate) {
+            if (!Number.isFinite(value)) return;
+            stats.money[label] = (stats.money[label] || 0) + value * rate;
+          }
+
+          function collectStats(table) {
+            const headers = Array.from(table.querySelectorAll('thead th'));
+            const labels = headers.map((header) => (header.textContent || '').trim());
+            const currencyIndex = labels.indexOf('币种');
+            if (currencyIndex < 0) return { labels, byCurrency: new Map(), cny: blankStats(table.dataset.summaryKind || '') };
+
+            const byCurrency = new Map();
+            const cny = blankStats(table.dataset.summaryKind || '');
+            table.querySelectorAll('tbody tr').forEach((row) => {
+              if (row.style.display === 'none') return;
+              const cells = Array.from(row.children);
+              if (cells.length !== labels.length) return;
+              const currency = (cells[currencyIndex].textContent || '').trim();
+              if (!currency || currency === '-') return;
+              const rate = Number(fxRatesToCny[currency] || 1);
+              const stats = byCurrency.get(currency) || blankStats(table.dataset.summaryKind || '');
+              byCurrency.set(currency, stats);
+              stats.count += 1;
+              cny.count += 1;
+
+              labels.forEach((label, index) => {
+                if (!moneyLabels.has(label)) return;
+                const value = numberFromText(cells[index].textContent);
+                addMoney(stats, label, value, 1);
+                addMoney(cny, label, value, rate);
+              });
+
+              const capital = numberFromText(row.dataset.capital);
+              const capitalDays = numberFromText(row.dataset.capitalDays);
+              if (Number.isFinite(capital)) {
+                stats.capital += capital;
+                cny.capital += capital * rate;
+              }
+              if (Number.isFinite(capitalDays)) {
+                stats.capitalDays += capitalDays;
+                cny.capitalDays += capitalDays * rate;
+              }
+            });
+            return { labels, byCurrency, cny };
+          }
+
+          function footerCellClass(headers, index) {
+            const header = headers[index];
+            if (!header) return 'text';
+            const classes = Array.from(header.classList).filter((name) => !name.startsWith('sort-'));
+            return classes.length ? classes.join(' ') : 'text';
+          }
+
+          function appendRow(tfoot, table, labels, stats, currency, title, isCny) {
+            if (!stats.count) return;
+            const headers = Array.from(table.querySelectorAll('thead th'));
+            const row = document.createElement('tr');
+            row.className = isCny ? 'summary-footer summary-footer-cny' : 'summary-footer';
+            labels.forEach((label, index) => {
+              const cell = document.createElement('td');
+              cell.className = footerCellClass(headers, index);
+              let numeric = null;
+              let text = '-';
+              if (index === 0) {
+                text = title;
+              } else if (label === '币种') {
+                text = currency;
+              } else if (moneyLabels.has(label)) {
+                numeric = stats.money[label];
+                text = formatNumber(numeric);
+                cell.className = classForValue(label, numeric, cell.className);
+              } else if (label === '盈亏率' && stats.summaryKind === 'holdings') {
+                const pnl = stats.money['浮动盈亏'];
+                const cost = stats.money['持仓成本'];
+                numeric = Number.isFinite(pnl) && cost ? pnl / Math.abs(cost) : null;
+                text = formatPercent(numeric);
+                cell.className = classForValue(label, numeric, cell.className);
+              } else if (label === '个股仓位' && stats.summaryKind === 'holdings') {
+                numeric = 1;
+                text = '100.00%';
+              } else if ((label === '总收益率' || label === '综合年化') && (stats.summaryKind === 'stock' || stats.summaryKind === 'annual')) {
+                const pnl = stats.money['总盈亏'];
+                numeric = label === '总收益率'
+                  ? (Number.isFinite(pnl) && stats.capital ? pnl / stats.capital : null)
+                  : (Number.isFinite(pnl) && stats.capitalDays ? pnl * 365 / stats.capitalDays : null);
+                text = formatPercent(numeric);
+                cell.className = classForValue(label, numeric, cell.className);
+              }
+              if (Number.isFinite(numeric)) cell.dataset.sortValue = String(numeric);
+              cell.textContent = text;
+              row.appendChild(cell);
+            });
+            tfoot.appendChild(row);
+          }
+
+          function apply() {
+            document.querySelectorAll('.summary-table[data-summary-kind]').forEach((table) => {
+              let tfoot = table.querySelector('tfoot');
+              if (!tfoot) {
+                tfoot = document.createElement('tfoot');
+                table.appendChild(tfoot);
+              }
+              tfoot.innerHTML = '';
+              const { labels, byCurrency, cny } = collectStats(table);
+              if (!labels || !labels.length) return;
+              byCurrency.forEach((stats, currency) => appendRow(tfoot, table, labels, stats, currency, `${currency}汇总`, false));
+              appendRow(tfoot, table, labels, cny, '人民币', '人民币折算汇总', true);
+            });
+          }
+
+          function scheduleApply() {
+            requestAnimationFrame(() => {
+              apply();
+              if (typeof balanceSummaryTableWidths === 'function') {
+                requestAnimationFrame(balanceSummaryTableWidths);
+              }
+            });
+          }
+
+          const originalUpdateSummaryTable = window.updateSummaryTable;
+          if (typeof originalUpdateSummaryTable === 'function' && !originalUpdateSummaryTable.__withCnySettlement) {
+            const wrappedUpdateSummaryTable = function(...args) {
+              const result = originalUpdateSummaryTable.apply(this, args);
+              scheduleApply();
+              return result;
+            };
+            wrappedUpdateSummaryTable.__withCnySettlement = true;
+            window.updateSummaryTable = wrappedUpdateSummaryTable;
+          }
+
+          const originalUpdateSummaryTables = window.updateSummaryTables;
+          if (typeof originalUpdateSummaryTables === 'function' && !originalUpdateSummaryTables.__withCnySettlement) {
+            const wrappedUpdateSummaryTables = function(...args) {
+              const result = originalUpdateSummaryTables.apply(this, args);
+              scheduleApply();
+              return result;
+            };
+            wrappedUpdateSummaryTables.__withCnySettlement = true;
+            window.updateSummaryTables = wrappedUpdateSummaryTables;
+          }
+
+          if (document.readyState === 'loading') {
+            document.addEventListener('DOMContentLoaded', scheduleApply);
+          } else {
+            scheduleApply();
+          }
+          window.addEventListener('load', scheduleApply);
+        })();
+        </script>
+
+          <details class="dashboard-section section-collapsible" open>
+  <summary class="section-summary">
+    <div class="section-head">
+      <div>
+        <h2 class="section-title">工作表入口</h2>
+        <p class="section-note">如果你想按原始表格布局查看，可以直接打开下面这些工作表页。</p>
+      </div>
+      <span class="section-toggle" aria-hidden="true"></span>
+    </div>
+  </summary>
+  <div class="section-body">
+    <div class="section-actions"><a class="section-link" href="交易记录.html">交易记录</a><a class="section-link" href="交易记录 - 示例.html">交易记录 - 示例</a></div>
+  </div>
+</details>
+
+        </div>
+        </body>
+        </html>

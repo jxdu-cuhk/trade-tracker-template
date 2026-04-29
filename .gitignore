@@ -1,0 +1,8 @@
+.DS_Store
+.venv/
+logs/
+__pycache__/
+.trade-tracker/history/
+.trade-tracker/logs/
+.trade-tracker/tools/cache/
+.trade-tracker/tools/__pycache__/
