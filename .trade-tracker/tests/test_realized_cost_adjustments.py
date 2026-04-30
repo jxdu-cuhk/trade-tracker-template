@@ -332,6 +332,18 @@ class RealizedCostAdjustmentTests(unittest.TestCase):
 
         self.assertEqual(rates, {"港币": 0.92, "美元": 7.20})
 
+    def test_fx_rates_start_eastmoney_and_yahoo_together(self):
+        with (
+            patch("trade_tracker.market_data.fetch_eastmoney_fx_rates_to_cny", return_value={"港币": 0.91}) as eastmoney,
+            patch("trade_tracker.market_data.fetch_yahoo_fx_rates_to_cny", return_value={"港币": 0.92, "美元": 7.20}) as yahoo,
+        ):
+            rates = market_data_module.compute_fx_rates_to_cny()
+
+        self.assertEqual(rates["港币"], 0.91)
+        self.assertEqual(rates["美元"], 7.20)
+        eastmoney.assert_called_once()
+        yahoo.assert_called_once()
+
     def test_fx_prefetch_result_is_reused(self):
         previous_rates = market_data_module._FX_RATES_TO_CNY
         previous_future = market_data_module._FX_RATES_FUTURE

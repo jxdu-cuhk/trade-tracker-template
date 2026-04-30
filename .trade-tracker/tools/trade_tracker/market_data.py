@@ -177,18 +177,27 @@ def compute_fx_rates_to_cny() -> dict[str, float]:
     emit_progress("读取汇率", "用于把不同币种的持仓仓位合并排序。", 38)
     rates = dict(FX_RATE_FALLBACKS_TO_CNY)
     rates["人民币"] = 1.0
-    emit_progress("读取汇率", "东方财富批量读取港币/美元兑人民币汇率。", 39)
-    eastmoney_rates = fetch_eastmoney_fx_rates_to_cny(FX_RATE_SECIDS_TO_CNY)
-    missing_fx_symbols = {
-        currency: FX_RATE_YAHOO_SYMBOLS_TO_CNY.get(currency, "")
-        for currency in FX_RATE_SECIDS_TO_CNY
-        if not isinstance(eastmoney_rates.get(currency), (int, float))
-    }
-    yahoo_rates = {}
-    if missing_fx_symbols:
-        emit_progress("读取汇率", f"东方财富缺少 {len(missing_fx_symbols)} 个汇率，Yahoo 并发兜底。", 40)
-        yahoo_rates = fetch_yahoo_fx_rates_to_cny(missing_fx_symbols)
-    for currency, secid in FX_RATE_SECIDS_TO_CNY.items():
+    emit_progress("读取汇率", "东方财富和 Yahoo 并发读取港币/美元兑人民币汇率。", 39)
+    eastmoney_rates: dict[str, float] = {}
+    yahoo_rates: dict[str, float] = {}
+    with ThreadPoolExecutor(max_workers=2) as executor:
+        future_map = {
+            executor.submit(fetch_eastmoney_fx_rates_to_cny, FX_RATE_SECIDS_TO_CNY): "东方财富",
+            executor.submit(fetch_yahoo_fx_rates_to_cny, FX_RATE_YAHOO_SYMBOLS_TO_CNY): "Yahoo",
+        }
+        for future in as_completed(future_map):
+            source = future_map[future]
+            try:
+                source_rates = future.result()
+            except Exception:
+                source_rates = {}
+            if source == "东方财富":
+                eastmoney_rates = source_rates
+            else:
+                yahoo_rates = source_rates
+            fetched = sum(1 for value in source_rates.values() if isinstance(value, (int, float)) and value > 0)
+            emit_progress("读取汇率", f"{source} 汇率完成，取到 {fetched}/{len(FX_RATE_SECIDS_TO_CNY)}。", 40)
+    for currency in FX_RATE_SECIDS_TO_CNY:
         emit_progress("读取汇率", f"整理{currency}兑人民币汇率。", 41)
         rate = eastmoney_rates.get(currency)
         if not isinstance(rate, (int, float)):
