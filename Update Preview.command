@@ -28,7 +28,7 @@ finish() {
   echo
   if [[ $exit_code -eq 0 ]]; then
     echo "操作完成。"
-    echo "现在可以直接打开：$SCRIPT_DIR/Trade Tracker.html"
+    echo "现在可以直接打开韭菜账本：$SCRIPT_DIR/Trade Tracker.html"
   else
     echo "预览服务启动失败，退出码：$exit_code"
     echo "如果反复失败，把这个窗口截图发给我就行。"
@@ -38,7 +38,7 @@ finish() {
 }
 trap finish EXIT
 
-echo "正在启动交易看板本地预览服务..."
+echo "正在启动韭菜账本本地预览服务..."
 echo "网页入口：$PREVIEW_URL"
 echo "保持这个窗口打开，网页里的刷新按钮才能运行。"
 echo

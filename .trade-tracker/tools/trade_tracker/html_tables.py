@@ -8,6 +8,7 @@ from . import state
 from .market_data import current_fx_rates_to_cny, display_currency_label
 from .settings import ANNUAL_STOCK_SUMMARY_COLUMN_ORDER, HOLDINGS_COLUMN_ORDER, STOCK_SUMMARY_COLUMN_ORDER
 from .utils import cell_text, parse_float
+from .options import option_key
 
 
 def move_cells(cells: list[str], label_from: str, label_after: str, labels: list[str] | None = None) -> list[str]:
@@ -61,6 +62,74 @@ def move_table_column(table_html: str, label_from: str, label_after: str) -> str
         return prefix + moved_body + suffix
 
     return re.sub(r"(<t(?:body|foot)>\s*)(.*?)(\s*</t(?:body|foot)>)", move_section_rows, updated, flags=re.S)
+
+
+def add_open_option_mark_columns(output_dir) -> None:
+    html_path = output_dir / "index.html"
+    if not html_path.exists():
+        return
+    try:
+        html_text = html_path.read_text(encoding="utf-8")
+        html_path.write_text(add_open_option_mark_columns_to_html(html_text), encoding="utf-8")
+    except OSError:
+        return
+
+
+def add_open_option_mark_columns_to_html(html_text: str) -> str:
+    section_match = re.search(
+        r'(<h2 class="section-title">未平仓期权</h2>.*?<table\b[^>]*class="[^"]*\bsummary-table\b[^"]*"[^>]*>)(.*?)(</table>)',
+        html_text,
+        re.S,
+    )
+    if not section_match or "data-option-marks" in section_match.group(1):
+        return html_text
+
+    table_prefix, table_body, table_suffix = section_match.groups()
+    if "现价" in table_body and "浮动盈亏" in table_body and "占用本金" in table_body:
+        return html_text
+
+    updated_body = re.sub(
+        r"(<th\b[^>]*>开仓价</th>)",
+        r'\1<th class="money" data-sort-type="number">现价</th><th class="money" data-sort-type="number">浮动盈亏</th><th class="money" data-sort-type="number">占用本金</th>',
+        table_body,
+        count=1,
+    )
+    updated_body = re.sub(r"(<tbody>\s*)(.*?)(\s*</tbody>)", enrich_option_tbody, updated_body, flags=re.S)
+    updated_prefix = table_prefix.replace("<table ", '<table data-option-marks="1" ', 1)
+    updated_section = updated_prefix + updated_body + table_suffix
+    section_text = section_match.group(0)
+    section_text = section_text.replace(table_prefix + table_body + table_suffix, updated_section)
+    section_text = section_text.replace(
+        "只要期权那一行还没有平仓价，就会继续留在这里，方便你盯到期日。",
+        "只要期权那一行还没有平仓价，就会继续留在这里；现价和浮动盈亏会优先通过富途 OpenD 匹配期权链，取不到时显示 -。",
+        1,
+    )
+    return html_text[: section_match.start()] + section_text + html_text[section_match.end() :]
+
+
+def enrich_option_tbody(match: re.Match[str]) -> str:
+    prefix, body, suffix = match.groups()
+
+    def enrich_row(row_match: re.Match[str]) -> str:
+        row_prefix, row_body, row_suffix = row_match.groups()
+        cells = re.findall(r"<td\b[^>]*>.*?</td>", row_body, re.S)
+        if len(cells) < 10:
+            return row_match.group(0)
+        values = [cell_text(cell) for cell in cells]
+        key = option_key(values[0], values[2], values[3], values[4], values[5], values[6], values[7], values[8], values[9])
+        mark = state.OPEN_OPTION_MARKS.get(key, {})
+        pnl_class = mark.get("float_pnl_class") or ""
+        pnl_class_attr = f" {html.escape(pnl_class)}" if pnl_class else ""
+        inserted = [
+            f'<td class="money">{html.escape(mark.get("current_price") or "-")}</td>',
+            f'<td class="money{pnl_class_attr}">{html.escape(mark.get("float_pnl") or "-")}</td>',
+            f'<td class="money">{html.escape(mark.get("capital") or "-")}</td>',
+        ]
+        cells.insert(9, "".join(inserted))
+        return row_prefix + "".join(cells) + row_suffix
+
+    enriched = re.sub(r"(<tr\b[^>]*>)(.*?)(</tr>)", enrich_row, body, flags=re.S)
+    return prefix + enriched + suffix
 
 
 def reorder_table_columns(table_html: str, desired_order: list[str]) -> str:

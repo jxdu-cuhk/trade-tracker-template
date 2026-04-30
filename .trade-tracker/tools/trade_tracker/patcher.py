@@ -4,6 +4,7 @@ from pathlib import Path
 
 from . import state
 from .analytics import build_holding_days_map, build_last_clear_date_map, build_summary_holding_days_maps
+from .branding import brand_dashboard_html, brand_launcher_html
 from .html_tables import (
     add_balanced_summary_table_script,
     add_holdings_cny_settlement_footer_script,
@@ -32,6 +33,7 @@ def patch_core(core, workbook_path: Path) -> None:
     original_render_summary_table = core.render_summary_table
     original_render_annual_summary_table = core.render_annual_summary_table
     original_render_dashboard_html = core.render_dashboard_html
+    original_render_root_launcher_html = getattr(core, "render_root_launcher_html", None)
     original_lookup_security_name = core.lookup_security_name
     original_build_dashboard_data = core.build_dashboard_data
     emit_progress("读取名称缓存", "从历史表、券商导出和本地缓存映射标的名称。", 10)
@@ -103,11 +105,19 @@ def patch_core(core, workbook_path: Path) -> None:
         html = remove_stock_summary_section(html)
         html = add_refresh_progress_panel(html)
         html = add_balanced_summary_table_script(html)
-        return add_holdings_cny_settlement_footer_script(html)
+        html = add_holdings_cny_settlement_footer_script(html)
+        return brand_dashboard_html(html)
+
+    def render_root_launcher_html(*args, **kwargs):
+        if not original_render_root_launcher_html:
+            return ""
+        return brand_launcher_html(original_render_root_launcher_html(*args, **kwargs))
 
     core.render_summary_table = render_summary_table
     core.render_annual_summary_table = render_annual_summary_table
     core.render_dashboard_html = render_dashboard_html
+    if original_render_root_launcher_html:
+        core.render_root_launcher_html = render_root_launcher_html
     core.build_dashboard_data = build_dashboard_data
     core.lookup_security_name = lookup_security_name
     patch_quote_fetchers(core)

@@ -2,6 +2,8 @@ from __future__ import annotations
 
 from pathlib import Path
 
+from .branding import brand_preview_index
+from .html_tables import add_open_option_mark_columns
 from .names import save_name_cache
 from .patcher import patch_core
 from .runtime import APP_DIR, PROJECT_ROOT, emit_progress, load_core_module
@@ -25,8 +27,10 @@ def main() -> None:
         emit_progress("生成网页", "正在重新计算表格、图表和汇总数据。", 36)
         core.export_preview(args.input.resolve(), args.output.resolve(), args.min_rows, args.extra_rows)
         emit_progress("整理页面", "清理表格币种显示和行列间距。", 86)
+        add_open_option_mark_columns(args.output.resolve())
         tidy_preview_table_currency_labels(args.output.resolve())
         compact_preview_table_spacing(args.output.resolve())
+        brand_preview_index(args.output.resolve())
     finally:
         emit_progress("保存缓存", "保存标的名称缓存，减少下次查询。", 96)
         save_name_cache()

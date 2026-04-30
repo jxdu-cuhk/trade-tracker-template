@@ -14,7 +14,7 @@ from urllib.error import URLError
 from urllib.request import urlopen
 
 
-LABEL = "com.dalin.trade-tracker.preview"
+LABEL = "com.leek-ledger.preview"
 HOST = "127.0.0.1"
 PORT = "8765"
 def resolve_project_root() -> Path:
@@ -184,7 +184,7 @@ def main() -> int:
 
     if wait_until_ready():
         print(f"本地刷新服务已常驻：{PING_URL}")
-        print(f"现在可以直接打开：{PROJECT_ROOT / 'Trade Tracker.html'}")
+        print(f"现在可以直接打开韭菜账本：{PROJECT_ROOT / 'Trade Tracker.html'}")
         return 0
 
     print("服务已经注册，但暂时没有通过健康检查。")

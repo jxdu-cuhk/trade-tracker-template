@@ -1,9 +1,9 @@
 ---
-name: trade-tracker
-description: Use this skill when maintaining the Trade Tracker dashboard template, importing trade rows, regenerating the local HTML preview, or preparing a privacy-safe public release with no personal trading data.
+name: leek-ledger
+description: Use this skill when maintaining Leek Ledger, importing broker trade exports into the workbook, regenerating the local HTML preview, or preparing a privacy-safe public release with no personal trading data.
 ---
 
-# Trade Tracker
+# 韭菜账本 Leek Ledger
 
 ## Core workflow
 
@@ -12,6 +12,7 @@ description: Use this skill when maintaining the Trade Tracker dashboard templat
 3. Use `Trade Tracker.xlsx` as the workbook source of truth.
 4. Regenerate the preview with `Update Preview.command`, or run `python3 .trade-tracker/tools/export_trade_tracker_html.py`.
 5. Check `Trade Tracker.html` and `.trade-tracker/preview/index.html` after changes.
+6. Run focused tests before a full refresh when changing data logic: `python3 -m unittest discover -s .trade-tracker/tests -v`.
 
 ## Data rules
 
@@ -19,6 +20,8 @@ description: Use this skill when maintaining the Trade Tracker dashboard templat
 - Do not commit broker exports, screenshots, account files, logs, history folders, or local caches.
 - Do not commit `security_name_cache.json`; symbol-name caches belong in private/local use only.
 - For options, closed contracts may be included in realized P/L for the related underlying. Open option legs should remain separate until closed or expired.
+- Open options can display current price, floating P/L, and occupied capital via Futu OpenD when available; if Futu cannot match the option chain, leave current price and floating P/L as `-`.
+- For current holdings, closed stock/ETF trade P/L and closed option P/L can be assigned back to the underlying to adjust displayed holding cost.
 - Use calendar days for holding period calculations unless the user explicitly asks for trading days.
 
 ## Importing trades with AI
@@ -66,6 +69,6 @@ Inspect the workbook and confirm every sheet has only the header row or intentio
 
 ## Release checklist
 
-- The public repository contains the app code, empty workbook, preview files, README, and this skill.
+- The public repository contains the app code, empty workbook, preview files, README, tests, and this skill.
 - The private repository may contain real local data, but must stay private.
 - After pushing, clone the public repository fresh and repeat the privacy checks against the remote copy.

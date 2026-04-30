@@ -1,8 +1,8 @@
-# 交易看板目录说明
+# 韭菜账本 Leek Ledger 目录说明
 
 日常使用只需要关注主目录这几个入口：
 
-- `Trade Tracker.html`: 直接打开最新网页看板。
+- `Trade Tracker.html`: 直接打开最新韭菜账本看板。
 - `Trade Tracker.xlsx`: 交易记录工作簿。
 - `Update Preview.command`: 后台服务异常时的备用启动入口。
 
@@ -19,7 +19,7 @@
 - `.trade-tracker/tools/export_trade_tracker_html.py`: 很薄的命令入口，保留原来的运行方式。
 - `.trade-tracker/tools/trade_tracker/app.py`: 导出流程编排，负责加载核心模块、生成网页、整理输出。
 - `.trade-tracker/tools/trade_tracker/patcher.py`: 把我们自己的持仓、汇总、行情、刷新面板逻辑挂到核心生成器上。
-- `.trade-tracker/tools/trade_tracker/options.py`: 期权收益口径，比如已平仓 covered call 归入对应标的。
+- `.trade-tracker/tools/trade_tracker/options.py`: 期权和已完成现股收益口径，比如已平仓 covered call、T 出利润归入对应标的并回冲当前持仓成本。
 - `.trade-tracker/tools/trade_tracker/market_data.py`: Futu、东方财富、腾讯行情和汇率获取。
 - `.trade-tracker/tools/trade_tracker/names.py`: 标的名称缓存和历史券商文件映射。
 - `.trade-tracker/tools/trade_tracker/html_tables.py`: 表格列顺序、汇总行、排序和人民币折算汇总。

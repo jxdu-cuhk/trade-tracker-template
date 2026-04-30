@@ -3,7 +3,7 @@
         <head>
         <meta charset="utf-8">
         <meta name="viewport" content="width=device-width, initial-scale=1">
-        <title>交易看板预览</title>
+        <title>韭菜账本 Leek Ledger</title>
         <link rel="stylesheet" href="resources/preview.css">
         <script>
         function parseSortableValue(text, sortType) {
@@ -296,8 +296,8 @@
         <body>
         <div class="index-page">
           <div class="index-card">
-            <h1 class="index-title">交易看板预览</h1>
-            <p class="index-text">生成自 Trade Tracker.xlsx。首页会集中展示当前持仓、未平仓期权和按时间排序的交易时间线；下面各个大板块都可以单独折叠。</p>
+            <h1 class="index-title">韭菜账本 Leek Ledger</h1>
+            <p class="index-text">一个本地优先的交易记录、盈亏复盘与持仓看板。记录每一次被市场教育的痕迹。由 Trade Tracker.xlsx 生成，集中展示当前持仓、未平仓期权、个股汇总和交易时间线。</p>
           </div>
 
         <style>
@@ -565,7 +565,7 @@
   </div>
 <div class="metric-card metric-card-mini">
     <div class="metric-label">行情刷新日期</div>
-    <div class="metric-value">2026-04-29</div>
+    <div class="metric-value">2026-04-30</div>
     <div class="metric-note">重新双击刷新脚本后，这里的现价会一起更新。</div>
   </div>
 </div>
@@ -578,7 +578,7 @@
     <div class="section-head">
       <div>
         <h2 class="section-title">总收益曲线</h2>
-        <p class="section-note">这里按币种分别画累计收益曲线：已平仓交易按平仓日计入，当前持仓的浮盈亏统一落在今天这一个点。未平仓期权暂未计入实时估值。</p>
+        <p class="section-note">这里按币种分别画累计收益曲线：已平仓交易按平仓日计入，当前持仓的浮盈亏统一落在今天这一个点。未平仓期权会在期权表尝试展示现价和浮动盈亏，收益曲线暂不计入实时估值。</p>
       </div>
       <span class="section-toggle" aria-hidden="true"></span>
     </div>
@@ -1037,7 +1037,7 @@
         <script>
         /* Codex summary CNY settlement footer */
         (function addSummarySettlementRows() {
-          const fxRatesToCny = {"人民币": 1.0, "港币": 0.8714, "美元": 6.8328};
+          const fxRatesToCny = {"人民币": 1.0, "港币": 0.8734, "美元": 6.8441};
           const moneyLabels = new Set(['分红净额', '已实现盈亏', '浮动盈亏', '持仓浮盈亏', '总盈亏', '最新市值', '当日盈亏', '持仓成本']);
           const toneLabels = new Set(['分红净额', '已实现盈亏', '浮动盈亏', '持仓浮盈亏', '总盈亏', '当日盈亏', '盈亏率', '总收益率', '综合年化']);
 
