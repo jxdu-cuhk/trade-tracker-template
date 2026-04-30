@@ -11,7 +11,13 @@ TOOLS_DIR = Path(__file__).resolve().parents[1] / "tools"
 sys.path.insert(0, str(TOOLS_DIR))
 
 from install_preview_service import RUNTIME_PACKAGES
-from trade_tracker.market_data import eastmoney_quote_from_row, fetch_option_quote, parse_hkex_option_detail, tencent_quote_from_payload
+from trade_tracker.market_data import (
+    eastmoney_quote_from_row,
+    fetch_option_quote,
+    fetch_yahoo_fx_rates_to_cny,
+    parse_hkex_option_detail,
+    tencent_quote_from_payload,
+)
 from trade_tracker.html_tables import add_balanced_summary_table_script, normalize_legacy_holdings_table, normalize_legacy_open_option_sections
 from trade_tracker.options import build_stock_realized_income_maps, open_option_mark_for_row, patch_dashboard_data_with_options
 from trade_tracker import state
@@ -305,6 +311,15 @@ class RealizedCostAdjustmentTests(unittest.TestCase):
         self.assertEqual(RUNTIME_PACKAGES, ["openpyxl==3.1.5", "pandas==3.0.2"])
         with patch("trade_tracker.market_data.fetch_hkex_option_quote", return_value=None):
             self.assertIsNone(fetch_option_quote(FakeCore(), "DEMO", "港币", "认购", "2026-05-28", 32))
+
+    def test_yahoo_fx_fallback_fetches_missing_rates_together(self):
+        def fake_yahoo_rate(symbol):
+            return {"HKDCNY=X": 0.92, "USDCNY=X": 7.20}.get(symbol)
+
+        with patch("trade_tracker.market_data.fetch_yahoo_fx_rate_to_cny", side_effect=fake_yahoo_rate):
+            rates = fetch_yahoo_fx_rates_to_cny({"港币": "HKDCNY=X", "美元": "USDCNY=X", "空": ""})
+
+        self.assertEqual(rates, {"港币": 0.92, "美元": 7.20})
 
     def test_legacy_public_holdings_table_is_normalized_to_full_columns(self):
         html = """

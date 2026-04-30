@@ -113,6 +113,8 @@ def fetch_eastmoney_fx_rates_to_cny(secids_by_currency: dict[str, str]) -> dict[
 
 
 def fetch_yahoo_fx_rate_to_cny(symbol: str) -> float | None:
+    if not clean_text(symbol):
+        return None
     url = f"https://query1.finance.yahoo.com/v8/finance/chart/{symbol}?range=1d&interval=1d"
     request = Request(url, headers={"User-Agent": "Mozilla/5.0"})
     try:
@@ -135,6 +137,28 @@ def fetch_yahoo_fx_rate_to_cny(symbol: str) -> float | None:
     return None
 
 
+def fetch_yahoo_fx_rates_to_cny(symbols_by_currency: dict[str, str]) -> dict[str, float]:
+    rates: dict[str, float] = {}
+    symbols = {currency: symbol for currency, symbol in symbols_by_currency.items() if clean_text(symbol)}
+    if not symbols:
+        return rates
+    workers = min(4, len(symbols))
+    with ThreadPoolExecutor(max_workers=workers) as executor:
+        future_map = {
+            executor.submit(fetch_yahoo_fx_rate_to_cny, symbol): currency
+            for currency, symbol in symbols.items()
+        }
+        for future in as_completed(future_map):
+            currency = future_map[future]
+            try:
+                rate = future.result()
+            except Exception:
+                rate = None
+            if isinstance(rate, (int, float)) and rate > 0:
+                rates[currency] = float(rate)
+    return rates
+
+
 def current_fx_rates_to_cny() -> dict[str, float]:
     global _FX_RATES_TO_CNY
     if _FX_RATES_TO_CNY is not None:
@@ -143,12 +167,22 @@ def current_fx_rates_to_cny() -> dict[str, float]:
     emit_progress("读取汇率", "用于把不同币种的持仓仓位合并排序。", 38)
     rates = dict(FX_RATE_FALLBACKS_TO_CNY)
     rates["人民币"] = 1.0
+    emit_progress("读取汇率", "东方财富批量读取港币/美元兑人民币汇率。", 39)
     eastmoney_rates = fetch_eastmoney_fx_rates_to_cny(FX_RATE_SECIDS_TO_CNY)
+    missing_fx_symbols = {
+        currency: FX_RATE_YAHOO_SYMBOLS_TO_CNY.get(currency, "")
+        for currency in FX_RATE_SECIDS_TO_CNY
+        if not isinstance(eastmoney_rates.get(currency), (int, float))
+    }
+    yahoo_rates = {}
+    if missing_fx_symbols:
+        emit_progress("读取汇率", f"东方财富缺少 {len(missing_fx_symbols)} 个汇率，Yahoo 并发兜底。", 40)
+        yahoo_rates = fetch_yahoo_fx_rates_to_cny(missing_fx_symbols)
     for currency, secid in FX_RATE_SECIDS_TO_CNY.items():
-        emit_progress("读取汇率", f"等待{currency}兑人民币汇率。", 39)
+        emit_progress("读取汇率", f"整理{currency}兑人民币汇率。", 41)
         rate = eastmoney_rates.get(currency)
-        if rate is None:
-            rate = fetch_yahoo_fx_rate_to_cny(FX_RATE_YAHOO_SYMBOLS_TO_CNY.get(currency, ""))
+        if not isinstance(rate, (int, float)):
+            rate = yahoo_rates.get(currency)
         if isinstance(rate, (int, float)) and rate > 0:
             rates[currency] = float(rate)
     _FX_RATES_TO_CNY = rates
