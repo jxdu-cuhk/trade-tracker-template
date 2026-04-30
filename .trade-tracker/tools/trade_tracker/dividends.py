@@ -153,6 +153,17 @@ def load_workbook_dividend_events(core, workbook_path: Path) -> list[dict[str, o
         workbook.close()
 
 
+def workbook_has_dividend_sheet(workbook_path: Path) -> bool:
+    load_workbook = _load_workbook()
+    if load_workbook is None or not workbook_path.exists():
+        return False
+    workbook = load_workbook(workbook_path, read_only=True, data_only=True)
+    try:
+        return DIVIDEND_SHEET_NAME in workbook.sheetnames
+    finally:
+        workbook.close()
+
+
 def load_history_dividend_events(core) -> list[dict[str, object]]:
     load_workbook = _load_workbook()
     if load_workbook is None:
@@ -194,8 +205,10 @@ def load_history_dividend_events(core) -> list[dict[str, object]]:
 
 
 def load_dividend_events(core, workbook_path: Path, original_loader=None) -> list[dict[str, object]]:
-    events = load_history_dividend_events(core)
-    events.extend(load_workbook_dividend_events(core, workbook_path))
+    if workbook_has_dividend_sheet(workbook_path):
+        events = load_workbook_dividend_events(core, workbook_path)
+    else:
+        events = load_history_dividend_events(core)
     if not events and original_loader is not None:
         try:
             events.extend(original_loader() or [])

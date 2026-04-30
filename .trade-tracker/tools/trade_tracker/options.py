@@ -8,7 +8,7 @@ from .dividends import build_dividend_income_maps
 from .market_data import display_currency_label, fetch_option_quote
 from .runtime import emit_progress
 from .settings import OPTION_EVENTS
-from .utils import cell_raw, clean_text, core_trade_type, excel_serial_to_date, format_currency_amounts, format_money_text, format_signed_percent, parse_display_number, raw_number, raw_text_value
+from .utils import cell_raw, clean_text, core_trade_type, excel_serial_to_date, format_currency_amounts, format_money_text, format_signed_percent, format_signed_percent_with_plus, parse_display_number, raw_number, raw_text_value
 
 
 STOCK_EVENTS = {"现股", "Stock", "stock", "STOCK"}
@@ -361,8 +361,11 @@ def adjust_holding_for_realized_income(row: dict[str, object], realized_income: 
             row["float_pnl_pct"] = format_signed_percent(float_pnl / abs(adjusted_cost))
         if last_price not in (None, 0):
             avg_cost = adjusted_cost / abs(qty)
-            breakeven = 1.0 - (avg_cost / last_price) if is_short else (avg_cost / last_price) - 1.0
-            row["breakeven"] = "已回本" if breakeven <= 0 else format_signed_percent(breakeven)
+            if float_pnl >= -0.005:
+                row["breakeven"] = "-"
+            else:
+                breakeven = (avg_cost / last_price) - 1.0
+                row["breakeven"] = format_signed_percent_with_plus(breakeven)
     row["sort_value"] = abs(adjusted_cost)
 
 

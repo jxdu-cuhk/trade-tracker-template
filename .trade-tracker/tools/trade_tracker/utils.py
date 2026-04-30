@@ -112,6 +112,13 @@ def format_signed_percent(value: float | None) -> str:
     return f"{value * 100:.2f}%"
 
 
+def format_signed_percent_with_plus(value: float | None) -> str:
+    if value is None:
+        return "--"
+    sign = "+" if value > 0 else ""
+    return f"{sign}{value * 100:.2f}%"
+
+
 def parse_display_number(value: object) -> float | None:
     text = clean_text(value).replace(",", "").replace("%", "")
     text = re.sub(r"^(人民币|港币|美元)\s+", "", text).strip()

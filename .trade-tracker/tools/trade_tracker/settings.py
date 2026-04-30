@@ -88,6 +88,11 @@ FX_RATE_SECIDS_TO_CNY = {
     "美元": "133.USDCNH",
 }
 
+FX_RATE_TENCENT_SYMBOLS_TO_CNY = {
+    "港币": "fxHKDCNY",
+    "美元": "fxUSDCNY",
+}
+
 FX_RATE_YAHOO_SYMBOLS_TO_CNY = {
     "港币": "HKDCNY=X",
     "美元": "USDCNY=X",
@@ -111,4 +116,3 @@ OVERVIEW_CURRENCY_METRIC_ORDER = [
     "持仓浮盈亏",
     "持仓当日盈亏",
 ]
-

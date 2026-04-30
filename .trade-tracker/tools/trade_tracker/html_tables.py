@@ -465,9 +465,16 @@ def format_compact_number(value: float | None, max_decimals: int = 3) -> str:
 def format_percent_cell(value: float | None) -> str:
     if value is None:
         return "-"
-    if value <= 0:
-        return "已回本"
-    return f"{value * 100:.2f}%"
+    sign = "+" if value > 0 else ""
+    return f"{sign}{value * 100:.2f}%"
+
+
+def breakeven_gap(avg_cost: float | None, price: float | None, pnl_value: float | None) -> float | None:
+    if pnl_value is not None and pnl_value >= -0.005:
+        return None
+    if avg_cost is None or price in (None, 0):
+        return None
+    return avg_cost / price - 1
 
 
 def cell_for_label(labels: list[str], cells: list[str], *names: str) -> str:
@@ -587,12 +594,9 @@ def normalize_legacy_holdings_table(core, table_html: str) -> str:
             side = "空头" if (qty_value is not None and qty_value < 0) or (market_value is not None and market_value < 0) else "多头"
         avg_cost = cost_value / abs(qty_value) if cost_value is not None and qty_value not in (None, 0) else None
         pnl_rate = pnl_value / cost_value if pnl_value is not None and cost_value not in (None, 0) else None
-        breakeven = None
-        if cost_value is not None and market_value not in (None, 0):
-            if "空头" in side:
-                breakeven = abs(market_value) / cost_value - 1
-            else:
-                breakeven = cost_value / abs(market_value) - 1
+        breakeven = breakeven_gap(avg_cost, price_value, pnl_value)
+        if breakeven is None and pnl_value is not None and pnl_value < -0.005 and cost_value is not None and market_value not in (None, 0):
+            breakeven = cost_value / abs(market_value) - 1
         days = text_for_label(labels, cells, "持股天数")
         if not days or days == "-":
             opened = date_key(open_date)
@@ -611,7 +615,7 @@ def normalize_legacy_holdings_table(core, table_html: str) -> str:
             "个股仓位": td_for_label("个股仓位", "-"),
             "持股天数": td_for_label("持股天数", days, parse_float(days.replace(",", "")) if days != "-" else None),
             "持仓均价": td_for_label("持仓均价", format_compact_number(avg_cost), avg_cost),
-            "回本空间": td_for_label("回本空间", format_percent_cell(breakeven), breakeven),
+            "回本空间": td_for_label("回本空间", format_percent_cell(breakeven), breakeven, breakeven),
             "方向": td_for_label("方向", side),
             "币种": td_for_label("币种", display_currency_label(core, normalized_currency)),
             "最近买入": td_for_label("最近买入", open_date or "-"),
@@ -748,6 +752,26 @@ def replace_td_content(cell_html: str, value: str, sort_value: float | None = No
     return f"{match.group(1)}{attrs}{html.escape(value)}{match.group(4)}"
 
 
+def replace_toned_td_content(cell_html: str, value: str, sort_value: float | None = None, color_value: float | None = None) -> str:
+    match = re.match(r"(<td\b)([^>]*>)(.*?)(</td>)", cell_html, re.S)
+    if not match:
+        return cell_html
+    attrs = re.sub(r'\sdata-sort-value="[^"]*"', "", match.group(2))
+    attrs = re.sub(r"\bvalue-(?:positive|negative|zero)\b", "", attrs)
+    attrs = re.sub(r'\sclass="([^"]*)"', lambda cls: f' class="{" ".join(cls.group(1).split())}"', attrs)
+    if color_value is not None:
+        tone = value_class(color_value).strip()
+        class_match = re.search(r'class="([^"]*)"', attrs)
+        if class_match:
+            current = class_match.group(1).strip()
+            attrs = attrs[: class_match.start(1)] + (f"{tone} {current}".strip()) + attrs[class_match.end(1) :]
+        else:
+            attrs = attrs[:-1] + f' class="{tone}">'
+    if sort_value is not None:
+        attrs = attrs[:-1] + f' data-sort-value="{sort_value:.12g}">'
+    return f"{match.group(1)}{attrs}{html.escape(value)}{match.group(4)}"
+
+
 def decorate_and_sort_holding_rows(core, table_html: str) -> str:
     header_match = re.search(r"(<thead>\s*<tr>)(.*?)(</tr>\s*</thead>)", table_html, re.S)
     body_match = re.search(r"(<tbody>\s*)(.*?)(\s*</tbody>)", table_html, re.S)
@@ -765,6 +789,10 @@ def decorate_and_sort_holding_rows(core, table_html: str) -> str:
     position_index = labels.index("个股仓位")
     side_index = labels.index("方向")
     currency_index = labels.index("币种")
+    breakeven_index = labels.index("回本空间") if "回本空间" in labels else -1
+    avg_cost_index = labels.index("持仓均价") if "持仓均价" in labels else -1
+    price_index = labels.index("现价") if "现价" in labels else -1
+    pnl_index = labels.index("浮动盈亏") if "浮动盈亏" in labels else -1
     rates = current_fx_rates_to_cny()
     row_infos = []
 
@@ -797,6 +825,18 @@ def decorate_and_sort_holding_rows(core, table_html: str) -> str:
             weight = exposure / total_exposure if total_exposure else None
             cells[market_value_index] = set_td_sort_value(cells[market_value_index], converted_value)
             cells[position_index] = replace_td_content(cells[position_index], format_percent(weight), weight)
+            if breakeven_index >= 0:
+                avg_cost = number_for_label(labels, cells, "持仓均价") if avg_cost_index >= 0 else None
+                price = number_for_label(labels, cells, "现价") if price_index >= 0 else None
+                pnl_parsed = parse_money_cell(cells[pnl_index]) if pnl_index >= 0 else None
+                pnl_value = pnl_parsed[1] if pnl_parsed else None
+                gap = breakeven_gap(avg_cost, price, pnl_value)
+                cells[breakeven_index] = replace_toned_td_content(
+                    cells[breakeven_index],
+                    format_percent_cell(gap),
+                    gap,
+                    gap,
+                )
         rendered_rows.append(row_prefix + "".join(cells) + row_suffix)
 
     new_body = "\n      " + "".join(rendered_rows) + "\n    "
@@ -1084,13 +1124,13 @@ def add_balanced_summary_table_script(html_text: str) -> str:
 
         function shouldToneSummaryLabel(label) {
           const normalized = String(label || '').trim();
-          if (!normalized || normalized === '回本空间') return false;
-          return /(浮盈|盈亏|收益|分红|年化)/.test(normalized);
+          if (!normalized) return false;
+          return /(浮盈|盈亏|收益|分红|年化|回本空间)/.test(normalized);
         }
 
         function toneClassForSummaryValue(label, text) {
           const raw = String(text || '').trim();
-          if (!shouldToneSummaryLabel(label) || !raw || raw === '-' || raw === '--' || raw === '已回本') return '';
+          if (!shouldToneSummaryLabel(label) || !raw || raw === '-' || raw === '--') return '';
           const value = parseSortableValue(raw, 'number');
           if (Number.isNaN(value)) return '';
           if (value > 0) return 'value-positive';
@@ -1152,11 +1192,15 @@ def add_balanced_summary_table_script(html_text: str) -> str:
 
 
 def annotate_holdings_fx_note(html_text: str) -> str:
-    return html_text.replace(
+    new_note = "这里只统计已经录入主表、且当前仍未平仓的现股仓位；个股仓位按实时汇率折成人民币口径计算，并按仓位绝对值从大到小排序。盈利仓位的回本空间显示 -，亏损仓位才显示还需上涨或下跌多少。"
+    old_notes = [
+        "这里只统计已经录入主表、且当前仍未平仓的现股仓位，按仓位绝对值从大到小排序。空头仓位会标成“空头”，数量和最新市值会按负值展示；回本空间这一列对多头显示还需上涨多少，对空头显示还需下跌多少。",
         "这里只统计已经录入主表、且当前仍未平仓的现股仓位，按仓位绝对值从大到小排序。",
-        "这里只统计已经录入主表、且当前仍未平仓的现股仓位；个股仓位按实时汇率折成人民币口径计算，并按仓位绝对值从大到小排序。",
-        1,
-    )
+    ]
+    for old_note in old_notes:
+        if old_note in html_text:
+            return html_text.replace(old_note, new_note, 1)
+    return html_text
 
 
 def summary_table_match(html_text: str, summary_kind: str) -> re.Match[str] | None:
@@ -1341,7 +1385,7 @@ def add_holdings_cny_settlement_footer_script(html_text: str) -> str:
         (function addSummarySettlementRows() {{
           const fxRatesToCny = {rates_json};
           const moneyLabels = new Set(['分红净额', '已实现盈亏', '浮动盈亏', '持仓浮盈亏', '总盈亏', '最新市值', '当日盈亏', '持仓成本']);
-          const toneLabels = new Set(['分红净额', '已实现盈亏', '浮动盈亏', '持仓浮盈亏', '总盈亏', '当日盈亏', '盈亏率', '总收益率', '综合年化']);
+          const toneLabels = new Set(['分红净额', '已实现盈亏', '浮动盈亏', '持仓浮盈亏', '总盈亏', '当日盈亏', '盈亏率', '总收益率', '综合年化', '回本空间']);
 
           function numberFromText(text) {{
             const cleaned = String(text || '').replace(/,/g, '').replace(/%/g, '').replace(/^(人民币|港币|美元)\\s+/, '').trim();

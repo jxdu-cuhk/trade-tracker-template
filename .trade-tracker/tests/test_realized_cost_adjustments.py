@@ -16,13 +16,14 @@ from trade_tracker import market_data as market_data_module
 from trade_tracker.market_data import (
     eastmoney_quote_from_row,
     fetch_option_quote,
+    fetch_tencent_fx_rates_to_cny,
     fetch_yahoo_fx_rates_to_cny,
     parse_hkex_option_detail,
     tencent_quote_from_payload,
     yahoo_quote_from_result,
 )
 from trade_tracker.html_tables import add_balanced_summary_table_script, normalize_legacy_holdings_table, normalize_legacy_open_option_sections
-from trade_tracker.dividends import DIVIDEND_SHEET_NAME, load_workbook_dividend_events
+from trade_tracker.dividends import DIVIDEND_SHEET_NAME, load_dividend_events, load_workbook_dividend_events
 from trade_tracker.options import build_stock_realized_income_maps, open_option_mark_for_row, patch_dashboard_data_with_options
 from trade_tracker import state
 
@@ -209,7 +210,7 @@ class RealizedCostAdjustmentTests(unittest.TestCase):
         self.assertEqual(holding["all_in_cost"], "人民币 9,605.00")
         self.assertEqual(holding["avg_cost"], "人民币 9.61")
         self.assertEqual(holding["float_pnl"], "人民币 1,895.00")
-        self.assertEqual(holding["breakeven"], "已回本")
+        self.assertEqual(holding["breakeven"], "-")
         self.assertEqual(patched["cost_text"], "人民币 9,605.00")
         self.assertEqual(patched["unrealized_pnl_text"], "人民币 1,895.00")
         self.assertEqual(patched["stock_summary"][0]["total_pnl"], "人民币 1,895.00")
@@ -264,6 +265,7 @@ class RealizedCostAdjustmentTests(unittest.TestCase):
         self.assertEqual(holding["all_in_cost"], "人民币 9,800.00")
         self.assertEqual(holding["avg_cost"], "人民币 9.80")
         self.assertEqual(holding["float_pnl"], "人民币 700.00")
+        self.assertEqual(holding["breakeven"], "-")
         self.assertEqual(patched["stock_summary"][0]["dividend"], "人民币 200.00")
         self.assertEqual(patched["stock_summary"][0]["total_pnl"], "人民币 700.00")
         self.assertEqual(patched["annual_summary"][0]["total_pnl"], "人民币 700.00")
@@ -287,6 +289,26 @@ class RealizedCostAdjustmentTests(unittest.TestCase):
         self.assertEqual(events[0]["currency"], "CNY")
         self.assertEqual(events[0]["amount"], 123.45)
         self.assertEqual(events[0]["kind"], "除权除息")
+
+    def test_workbook_dividend_sheet_overrides_history_imports(self):
+        from openpyxl import Workbook
+
+        with tempfile.TemporaryDirectory() as tmp_dir:
+            path = Path(tmp_dir) / "tracker.xlsx"
+            workbook = Workbook()
+            sheet = workbook.active
+            sheet.title = DIVIDEND_SHEET_NAME
+            sheet.append(["日期", "代码", "名称", "事件", "金额", "币种", "来源", "原始行"])
+            sheet.append(["2026-02-03", "600000", "示例银行", "除权除息", 123.45, "人民币", "手工分红", 8])
+            workbook.save(path)
+
+            with patch("trade_tracker.dividends.load_history_dividend_events", return_value=[
+                {"ticker": "000617", "name": "中油资本", "currency": "CNY", "amount": 61.56, "serial": 46000, "kind": "除权除息"}
+            ]) as history:
+                events = load_dividend_events(FakeCore(), path)
+
+        history.assert_not_called()
+        self.assertEqual([event["ticker"] for event in events], ["600000"])
 
     def test_short_holding_uses_inverse_cost_direction(self):
         closed_short = row(
@@ -327,7 +349,46 @@ class RealizedCostAdjustmentTests(unittest.TestCase):
         self.assertEqual(holding["all_in_cost"], "人民币 1,098.00")
         self.assertEqual(holding["avg_cost"], "人民币 10.98")
         self.assertEqual(holding["float_pnl"], "人民币 248.00")
-        self.assertEqual(holding["breakeven"], "已回本")
+        self.assertEqual(holding["breakeven"], "-")
+
+    def test_losing_short_holding_shows_downside_breakeven_space(self):
+        closed_short_loss = row(
+            kind="卖出",
+            open_date=46000,
+            close_date=46003,
+            ticker="TICKER_B",
+            event="现股",
+            qty=100,
+            open_price=10,
+            close_price=11,
+            fee=2,
+            pnl=-50,
+            currency="人民币",
+        )
+        data = {
+            "holdings": [
+                {
+                    "ticker": "TICKER_B",
+                    "currency": "人民币",
+                    "side": "空头",
+                    "qty": "-100",
+                    "all_in_cost": "人民币 1,000.00",
+                    "avg_cost": "人民币 10.00",
+                    "market_value": "人民币 -1,200.00",
+                    "last_price": "人民币 12.00",
+                    "float_pnl": "人民币 -200.00",
+                    "daily_pnl": "人民币 0.00",
+                }
+            ],
+            "stock_summary": [],
+            "annual_summary": [],
+        }
+
+        patched = patch_dashboard_data_with_options(FakeCore(), [(2, closed_short_loss)], data)
+        holding = patched["holdings"][0]
+
+        self.assertEqual(holding["float_pnl"], "人民币 -250.00")
+        self.assertEqual(holding["breakeven"], "-20.83%")
 
     def test_open_cash_secured_put_mark_uses_option_quote(self):
         open_put = row(
@@ -414,17 +475,54 @@ class RealizedCostAdjustmentTests(unittest.TestCase):
 
         self.assertEqual(rates, {"港币": 0.92, "美元": 7.20})
 
-    def test_fx_rates_start_eastmoney_and_yahoo_together(self):
+    def test_tencent_fx_rates_parse_batch_payload(self):
+        payload = (
+            'v_fxHKDCNY="310~港币人民币~HKDCNY~0.8716~0~20260501013139";\n'
+            'v_fxUSDCNY="310~美元人民币~USDCNY~6.8299~0~20260501013144";\n'
+        ).encode("gb18030")
+
+        class FakeResponse:
+            def __enter__(self):
+                return self
+
+            def __exit__(self, *_):
+                return False
+
+            def read(self):
+                return payload
+
+        with patch("trade_tracker.market_data.urlopen", return_value=FakeResponse()):
+            rates = fetch_tencent_fx_rates_to_cny({"港币": "fxHKDCNY", "美元": "fxUSDCNY"})
+
+        self.assertEqual(rates, {"港币": 0.8716, "美元": 6.8299})
+
+    def test_fx_rates_return_after_complete_tencent_rates(self):
         with (
+            patch("trade_tracker.market_data.fetch_tencent_fx_rates_to_cny", return_value={"港币": 0.90, "美元": 7.10}) as tencent,
             patch("trade_tracker.market_data.fetch_eastmoney_fx_rates_to_cny", return_value={"港币": 0.91}) as eastmoney,
             patch("trade_tracker.market_data.fetch_yahoo_fx_rates_to_cny", return_value={"港币": 0.92, "美元": 7.20}) as yahoo,
         ):
             rates = market_data_module.compute_fx_rates_to_cny()
 
-        self.assertEqual(rates["港币"], 0.91)
+        self.assertEqual(rates["港币"], 0.90)
+        self.assertEqual(rates["美元"], 7.10)
+        tencent.assert_called_once()
+        eastmoney.assert_not_called()
+        yahoo.assert_not_called()
+
+    def test_fx_rates_fallback_only_fetches_missing_tencent_rates(self):
+        with (
+            patch("trade_tracker.market_data.fetch_tencent_fx_rates_to_cny", return_value={"港币": 0.90}) as tencent,
+            patch("trade_tracker.market_data.fetch_eastmoney_fx_rates_to_cny", return_value={}) as eastmoney,
+            patch("trade_tracker.market_data.fetch_yahoo_fx_rates_to_cny", return_value={"美元": 7.20}) as yahoo,
+        ):
+            rates = market_data_module.compute_fx_rates_to_cny()
+
+        self.assertEqual(rates["港币"], 0.90)
         self.assertEqual(rates["美元"], 7.20)
-        eastmoney.assert_called_once()
-        yahoo.assert_called_once()
+        tencent.assert_called_once()
+        eastmoney.assert_called_once_with({"美元": "133.USDCNH"})
+        yahoo.assert_called_once_with({"美元": "USDCNY=X"})
 
     def test_fx_prefetch_result_is_reused(self):
         previous_rates = market_data_module._FX_RATES_TO_CNY
@@ -454,6 +552,8 @@ class RealizedCostAdjustmentTests(unittest.TestCase):
             self.assertIn(f">{header}</th>", normalized)
         self.assertIn(">662<", normalized)
         self.assertIn(">-0.04%</td>", normalized)
+        self.assertIn(">+0.04%</td>", normalized)
+        self.assertIn("value-positive", normalized)
         self.assertIn(">多头</td>", normalized)
         self.assertIn(">美元</td>", normalized)
 
@@ -520,8 +620,8 @@ class RealizedCostAdjustmentTests(unittest.TestCase):
         patched = add_balanced_summary_table_script(html)
 
         self.assertIn("function applySummaryTableTones", patched)
-        self.assertIn("浮盈|盈亏|收益|分红|年化", patched)
-        self.assertIn("normalized === '回本空间'", patched)
+        self.assertIn("浮盈|盈亏|收益|分红|年化|回本空间", patched)
+        self.assertNotIn("normalized === '回本空间'", patched)
 
 
 if __name__ == "__main__":
