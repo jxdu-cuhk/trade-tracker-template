@@ -3,9 +3,10 @@ from __future__ import annotations
 import json
 import re
 import socket
+import time
 from concurrent.futures import ThreadPoolExecutor, as_completed
-from urllib.parse import urlencode
 from urllib.error import URLError
+from urllib.parse import urlencode
 from urllib.request import Request, urlopen
 
 from .runtime import FUTU_HOST, FUTU_PORT, emit_progress
@@ -14,6 +15,16 @@ from .utils import clean_name, clean_text, parse_float
 
 _FUTU_OPEND_AVAILABLE: bool | None = None
 _FX_RATES_TO_CNY: dict[str, float] | None = None
+MARKET_HTTP_TIMEOUT = 3
+MARKET_BATCH_SIZE = 80
+EASTMONEY_BATCH_FIELDS = "f12,f13,f14,f2,f1,f18"
+EASTMONEY_SINGLE_FIELDS = "f57,f58,f43,f59,f60"
+
+
+def chunks(items, size: int = MARKET_BATCH_SIZE):
+    items = list(items)
+    for index in range(0, len(items), size):
+        yield items[index : index + size]
 
 
 def cache_name(core, ticker, currency, name):
@@ -47,11 +58,60 @@ def display_currency_label(core, currency: str) -> str:
     return raw
 
 
+def normalize_quote_key(core, ticker, currency) -> tuple[str, str]:
+    normalized_currency = core.normalize_currency(currency)
+    return core.normalize_ticker(ticker, normalized_currency), normalized_currency
+
+
+def quote_has_price(quote: object) -> bool:
+    return isinstance(quote, dict) and isinstance(quote.get("last_price"), (int, float))
+
+
+def eastmoney_quote_from_row(core, key: tuple[str, str], row: dict) -> dict:
+    ticker, currency = key
+    precision = row.get("f1") if row.get("f1") not in ("", None) else row.get("f59")
+    quote_name = clean_name(row.get("f14") or row.get("f58"))
+    return {
+        "ticker": ticker,
+        "name": quote_name,
+        "last_price": scale_quote_field(row.get("f2", row.get("f43")), precision),
+        "prev_close": scale_quote_field(row.get("f18", row.get("f60")), precision),
+        "source": "Eastmoney",
+    }
+
+
+def cache_quote_name(core, key: tuple[str, str], quote: dict) -> None:
+    ticker, currency = key
+    quote_name = clean_name(quote.get("name"))
+    if not quote_name:
+        return
+    cache_name(core, ticker, currency, quote_name)
+    if hasattr(core, "cache_security_name"):
+        core.cache_security_name(ticker, currency, quote_name)
+
+
 def fetch_eastmoney_fx_rate_to_cny(secid: str) -> float | None:
-    data = fetch_quote_payload(secid)
-    if not isinstance(data, dict):
+    rows = fetch_eastmoney_batch_payload([secid])
+    if not rows:
         return None
-    return scale_quote_field(data.get("f43"), data.get("f59"))
+    return scale_quote_field(rows[0].get("f2"), rows[0].get("f1"))
+
+
+def fetch_eastmoney_fx_rates_to_cny(secids_by_currency: dict[str, str]) -> dict[str, float]:
+    rates: dict[str, float] = {}
+    if not secids_by_currency:
+        return rates
+    rows = fetch_eastmoney_batch_payload(secids_by_currency.values())
+    row_by_code = {clean_text(row.get("f12")): row for row in rows if isinstance(row, dict)}
+    for currency, secid in secids_by_currency.items():
+        code = secid.split(".", 1)[-1]
+        row = row_by_code.get(code)
+        if not row:
+            continue
+        rate = scale_quote_field(row.get("f2"), row.get("f1"))
+        if isinstance(rate, (int, float)) and rate > 0:
+            rates[currency] = float(rate)
+    return rates
 
 
 def fetch_yahoo_fx_rate_to_cny(symbol: str) -> float | None:
@@ -85,9 +145,10 @@ def current_fx_rates_to_cny() -> dict[str, float]:
     emit_progress("读取汇率", "用于把不同币种的持仓仓位合并排序。", 38)
     rates = dict(FX_RATE_FALLBACKS_TO_CNY)
     rates["人民币"] = 1.0
+    eastmoney_rates = fetch_eastmoney_fx_rates_to_cny(FX_RATE_SECIDS_TO_CNY)
     for currency, secid in FX_RATE_SECIDS_TO_CNY.items():
         emit_progress("读取汇率", f"等待{currency}兑人民币汇率。", 39)
-        rate = fetch_eastmoney_fx_rate_to_cny(secid)
+        rate = eastmoney_rates.get(currency)
         if rate is None:
             rate = fetch_yahoo_fx_rate_to_cny(FX_RATE_YAHOO_SYMBOLS_TO_CNY.get(currency, ""))
         if isinstance(rate, (int, float)) and rate > 0:
@@ -211,8 +272,18 @@ def request_hkex_option_page(data: dict[str, str] | None = None, option_id: str 
                 "Referer": base_url,
             },
         )
-    with urlopen(request, timeout=6) as response:
-        return response.read().decode("utf-8", "ignore")
+    last_error = None
+    for attempt in range(3):
+        try:
+            with urlopen(request, timeout=6) as response:
+                return response.read().decode("utf-8", "ignore")
+        except (TimeoutError, URLError, OSError) as error:
+            last_error = error
+            if attempt < 2:
+                time.sleep(0.15 * (attempt + 1))
+    if last_error:
+        raise last_error
+    return ""
 
 
 def fetch_hkex_option_id(core, ticker, event, expiry, strike) -> str | None:
@@ -247,7 +318,18 @@ def fetch_hkex_option_id(core, ticker, event, expiry, strike) -> str | None:
 
 
 def parse_hkex_option_detail(html: str) -> tuple[float | None, str]:
-    price = None
+    # Prefer the visible bid/ask midpoint over the chart endpoint. The chart feed can lag
+    # by a prior trading day, while the detail page carries the delayed live quote panel.
+    text = clean_text(re.sub(r"<[^>]+>", " ", html))
+    bid_ask_match = re.search(r"Bid / Ask\s+([0-9.,-]+)\s*/\s*([0-9.,-]+)", text, re.I)
+    if bid_ask_match:
+        bid = parse_float(bid_ask_match.group(1))
+        ask = parse_float(bid_ask_match.group(2))
+        if bid is not None and ask is not None and bid >= 0 and ask >= 0:
+            midpoint = (bid + ask) / 2
+            as_of_match = re.search(r"Last Traded Price\s+\(As of\s*([^)]*)\)", text, re.I)
+            return midpoint, clean_text(as_of_match.group(1)) if as_of_match else ""
+
     as_of = ""
     price_match = re.search(
         r"Last Traded Price.*?\(As of\s*([^)]*)\).*?<span class=\"floatright col1b\"><strong>\s*([^<]+?)\s*</strong>",
@@ -256,8 +338,12 @@ def parse_hkex_option_detail(html: str) -> tuple[float | None, str]:
     )
     if price_match:
         as_of = clean_text(price_match.group(1))
-        price = parse_float(price_match.group(2))
-    return price, as_of
+        return parse_float(price_match.group(2)), as_of
+
+    text_price_match = re.search(r"Last Traded Price\s+\(As of\s*([^)]*)\)\s+([0-9.,-]+)", text, re.I)
+    if text_price_match:
+        return parse_float(text_price_match.group(2)), clean_text(text_price_match.group(1))
+    return None, ""
 
 
 def fetch_hkex_option_chart_last(option_id: str) -> float | None:
@@ -293,13 +379,20 @@ def fetch_hkex_option_quote(core, ticker, currency, event, expiry, strike) -> di
         html = ""
     last_price, as_of = parse_hkex_option_detail(html)
     if last_price is None:
-        last_price = fetch_hkex_option_chart_last(option_id)
+        for _attempt in range(2):
+            try:
+                html = request_hkex_option_page(option_id=option_id, ucode=underlying)
+            except (TimeoutError, URLError, OSError):
+                continue
+            last_price, as_of = parse_hkex_option_detail(html)
+            if last_price is not None:
+                break
     if last_price is None:
         return None
     return {
         "option_code": f"HKEX:{option_id}",
         "last_price": last_price,
-        "source": "HKEX",
+        "source": "HKEX delayed detail",
         "as_of": as_of,
     }
 
@@ -402,23 +495,78 @@ def infer_secid(core, ticker, currency) -> str | None:
     return None
 
 
-def fetch_quote_payload(secid: str) -> dict | None:
-    fields = "f57,f58,f43,f59,f60"
-    urls = [
-        f"http://push2.eastmoney.com/api/qt/stock/get?secid={secid}&fields={fields}",
-        f"https://push2.eastmoney.com/api/qt/stock/get?secid={secid}&fields={fields}",
-    ]
-    for _ in range(5):
-        for url in urls:
-            request = Request(url, headers={"User-Agent": "Mozilla/5.0"})
-            try:
-                with urlopen(request, timeout=5) as response:
-                    payload = json.loads(response.read().decode("utf-8", "ignore"))
-                data = payload.get("data") if isinstance(payload, dict) else None
-                if isinstance(data, dict):
-                    return data
-            except (TimeoutError, URLError, OSError, ValueError):
+def eastmoney_row_lookup_key(row: dict) -> tuple[str, str]:
+    market = clean_text(row.get("f13"))
+    code = clean_text(row.get("f12"))
+    if market == "116":
+        code = code.zfill(5)
+    return market, code
+
+
+def fetch_eastmoney_batch_payload(secids, fields: str = EASTMONEY_BATCH_FIELDS) -> list[dict]:
+    secid_list = [clean_text(secid) for secid in secids if clean_text(secid)]
+    if not secid_list:
+        return []
+    url = (
+        "https://push2.eastmoney.com/api/qt/ulist.np/get?"
+        + urlencode({"secids": ",".join(secid_list), "fields": fields})
+    )
+    request = Request(url, headers={"User-Agent": "Mozilla/5.0"})
+    try:
+        with urlopen(request, timeout=MARKET_HTTP_TIMEOUT) as response:
+            payload = json.loads(response.read().decode("utf-8", "ignore"))
+    except (TimeoutError, URLError, OSError, ValueError):
+        return []
+    data = payload.get("data") if isinstance(payload, dict) else None
+    rows = data.get("diff") if isinstance(data, dict) else None
+    return rows if isinstance(rows, list) else []
+
+
+def fetch_eastmoney_security_quotes(core, keys) -> dict[tuple[str, str], dict]:
+    secid_to_key: dict[str, tuple[str, str]] = {}
+    lookup_to_key: dict[tuple[str, str], tuple[str, str]] = {}
+    for ticker, currency in keys:
+        key = normalize_quote_key(core, ticker, currency)
+        secid = infer_secid(core, key[0], key[1])
+        if not secid:
+            continue
+        secid_to_key[secid] = key
+        market, code = secid.split(".", 1)
+        if market == "116":
+            code = code.zfill(5)
+        lookup_to_key[(market, code)] = key
+
+    quotes: dict[tuple[str, str], dict] = {}
+    for secid_group in chunks(secid_to_key):
+        rows = fetch_eastmoney_batch_payload(secid_group)
+        for row in rows:
+            if not isinstance(row, dict):
                 continue
+            key = lookup_to_key.get(eastmoney_row_lookup_key(row))
+            if not key:
+                continue
+            quote = eastmoney_quote_from_row(core, key, row)
+            if quote_has_price(quote):
+                cache_quote_name(core, key, quote)
+                quotes[key] = quote
+    return quotes
+
+
+def fetch_quote_payload(secid: str) -> dict | None:
+    urls = [
+        f"https://push2.eastmoney.com/api/qt/stock/get?secid={secid}&fields={EASTMONEY_SINGLE_FIELDS}",
+        f"http://push2.eastmoney.com/api/qt/stock/get?secid={secid}&fields={EASTMONEY_SINGLE_FIELDS}",
+    ]
+    for url in urls:
+        request = Request(url, headers={"User-Agent": "Mozilla/5.0"})
+        try:
+            with urlopen(request, timeout=MARKET_HTTP_TIMEOUT) as response:
+                payload = json.loads(response.read().decode("utf-8", "ignore"))
+            data = payload.get("data") if isinstance(payload, dict) else None
+            if isinstance(data, dict):
+                return data
+        except (TimeoutError, URLError, OSError, ValueError):
+            continue
     return None
 
 
@@ -427,27 +575,16 @@ def tencent_symbol(core, ticker, currency) -> str:
     normalized_currency = core.normalize_currency(currency)
     if normalized_currency == "HKD":
         return f"hk{normalized_ticker.zfill(5)}"
+    if normalized_currency == "USD":
+        return f"us{normalized_ticker.upper()}"
     if normalized_currency == "CNY" and normalized_ticker.isdigit():
         market = "sh" if normalized_ticker.startswith(("5", "6", "9")) else "sz"
         return f"{market}{normalized_ticker}"
     return ""
 
 
-def fetch_tencent_security_quote(core, ticker, currency) -> dict | None:
-    symbol = tencent_symbol(core, ticker, currency)
-    if not symbol:
-        return None
-    url = f"https://qt.gtimg.cn/q={symbol}"
-    request = Request(url, headers={"User-Agent": "Mozilla/5.0"})
-    try:
-        with urlopen(request, timeout=5) as response:
-            text = response.read().decode("gb18030", "ignore")
-    except (TimeoutError, URLError, OSError, ValueError):
-        return None
-    match = re.search(r'="([^"]*)"', text)
-    if not match:
-        return None
-    parts = match.group(1).split("~")
+def tencent_quote_from_payload(core, key: tuple[str, str], payload: str) -> dict | None:
+    parts = payload.split("~")
     if len(parts) < 5:
         return None
     last_price = parse_float(parts[3])
@@ -455,89 +592,177 @@ def fetch_tencent_security_quote(core, ticker, currency) -> dict | None:
     if last_price is None:
         return None
     name = clean_name(parts[1])
-    normalized_currency = core.normalize_currency(currency)
     return {
-        "ticker": core.normalize_ticker(ticker, normalized_currency),
+        "ticker": key[0],
         "name": name,
         "last_price": last_price,
         "prev_close": prev_close,
+        "source": "Tencent",
     }
 
 
-def patch_quote_fetchers(core) -> None:
-    def fetch_security_quote(ticker, currency):
-        normalized_ticker = core.normalize_ticker(ticker, currency)
-        normalized_currency = core.normalize_currency(currency)
+def fetch_tencent_security_quotes(core, keys) -> dict[tuple[str, str], dict]:
+    symbol_to_key: dict[str, tuple[str, str]] = {}
+    for ticker, currency in keys:
+        key = normalize_quote_key(core, ticker, currency)
+        symbol = tencent_symbol(core, key[0], key[1])
+        if symbol:
+            symbol_to_key[symbol] = key
+    quotes: dict[tuple[str, str], dict] = {}
+    for symbol_group in chunks(symbol_to_key):
+        url = f"https://qt.gtimg.cn/q={','.join(symbol_group)}"
+        request = Request(url, headers={"User-Agent": "Mozilla/5.0"})
+        try:
+            with urlopen(request, timeout=MARKET_HTTP_TIMEOUT) as response:
+                text = response.read().decode("gb18030", "ignore")
+        except (TimeoutError, URLError, OSError, ValueError):
+            continue
+        for symbol, payload in re.findall(r"v_([^=]+)=\"([^\"]*)\"", text):
+            key = symbol_to_key.get(symbol)
+            if not key:
+                continue
+            quote = tencent_quote_from_payload(core, key, payload)
+            if quote_has_price(quote):
+                cache_quote_name(core, key, quote)
+                quotes[key] = quote
+    return quotes
 
-        futu_quote = fetch_futu_security_quote(core, normalized_ticker, normalized_currency)
-        if isinstance(futu_quote, dict):
-            if futu_quote.get("name"):
-                cache_name(core, normalized_ticker, normalized_currency, futu_quote["name"])
-            if isinstance(futu_quote.get("last_price"), (int, float)):
-                return futu_quote
+
+def fetch_tencent_security_quote(core, ticker, currency) -> dict | None:
+    key = normalize_quote_key(core, ticker, currency)
+    return fetch_tencent_security_quotes(core, [key]).get(key)
+
+
+def fetch_yahoo_security_quote(core, ticker, currency) -> dict | None:
+    key = normalize_quote_key(core, ticker, currency)
+    if key[1] != "USD" or not key[0]:
+        return None
+    url = f"https://query1.finance.yahoo.com/v8/finance/chart/{key[0]}?range=1d&interval=1d"
+    request = Request(url, headers={"User-Agent": "Mozilla/5.0"})
+    try:
+        with urlopen(request, timeout=MARKET_HTTP_TIMEOUT) as response:
+            payload = json.loads(response.read().decode("utf-8", "ignore"))
+    except (TimeoutError, URLError, OSError, ValueError):
+        return None
+    try:
+        result = payload["chart"]["result"][0]
+        meta = result.get("meta") or {}
+        last_price = meta.get("regularMarketPrice")
+        prev_close = meta.get("chartPreviousClose") or meta.get("previousClose") or meta.get("regularMarketPreviousClose")
+        if not isinstance(last_price, (int, float)):
+            closes = (result.get("indicators") or {}).get("quote", [{}])[0].get("close") or []
+            for close in reversed(closes):
+                if isinstance(close, (int, float)) and close > 0:
+                    last_price = close
+                    break
+        if not isinstance(last_price, (int, float)):
+            return None
+        return {
+            "ticker": key[0],
+            "name": key[0],
+            "last_price": float(last_price),
+            "prev_close": float(prev_close) if isinstance(prev_close, (int, float)) else None,
+            "source": "Yahoo",
+        }
+    except (KeyError, IndexError, TypeError):
+        return None
+
+
+def patch_quote_fetchers(core) -> None:
+    security_quote_cache: dict[tuple[str, str], dict] = {}
+
+    def fetch_security_quote(ticker, currency):
+        key = normalize_quote_key(core, ticker, currency)
+        if key in security_quote_cache:
+            return security_quote_cache[key]
+        normalized_ticker, normalized_currency = key
 
         secid = infer_secid(core, normalized_ticker, normalized_currency)
-        if not secid:
-            return {}
+        if secid:
+            eastmoney_quote = fetch_eastmoney_security_quotes(core, [key]).get(key)
+            if quote_has_price(eastmoney_quote):
+                security_quote_cache[key] = eastmoney_quote
+                return eastmoney_quote
 
-        data = fetch_quote_payload(secid)
-        if not isinstance(data, dict):
-            tencent_quote = fetch_tencent_security_quote(core, normalized_ticker, normalized_currency)
-            if isinstance(tencent_quote, dict):
-                if tencent_quote.get("name"):
-                    cache_name(core, normalized_ticker, normalized_currency, tencent_quote["name"])
-                return tencent_quote
-            return {}
+            data = fetch_quote_payload(secid)
+            if isinstance(data, dict):
+                quote = eastmoney_quote_from_row(core, key, data)
+                if quote_has_price(quote):
+                    cache_quote_name(core, key, quote)
+                    security_quote_cache[key] = quote
+                    return quote
 
-        precision = data.get("f59")
-        quote_name = core.raw_text(data.get("f58")) if hasattr(core, "raw_text") else str(data.get("f58") or "").strip()
-        if quote_name:
-            cache_name(core, normalized_ticker, normalized_currency, quote_name)
-            if hasattr(core, "cache_security_name"):
-                core.cache_security_name(normalized_ticker, normalized_currency, quote_name)
-        result = {
-            "ticker": normalized_ticker,
-            "name": quote_name,
-            "last_price": scale_quote_field(data.get("f43"), precision),
-            "prev_close": scale_quote_field(data.get("f60"), precision),
-        }
-        if not isinstance(result.get("last_price"), (int, float)):
-            tencent_quote = fetch_tencent_security_quote(core, normalized_ticker, normalized_currency)
-            if isinstance(tencent_quote, dict):
-                if tencent_quote.get("name"):
-                    cache_name(core, normalized_ticker, normalized_currency, tencent_quote["name"])
-                return tencent_quote
-        return result
+        tencent_quote = fetch_tencent_security_quote(core, normalized_ticker, normalized_currency)
+        if quote_has_price(tencent_quote):
+            security_quote_cache[key] = tencent_quote
+            return tencent_quote
+
+        yahoo_quote = fetch_yahoo_security_quote(core, normalized_ticker, normalized_currency)
+        if quote_has_price(yahoo_quote):
+            security_quote_cache[key] = yahoo_quote
+            return yahoo_quote
+
+        futu_quote = fetch_futu_security_quote(core, normalized_ticker, normalized_currency)
+        if quote_has_price(futu_quote):
+            cache_quote_name(core, key, futu_quote)
+            security_quote_cache[key] = futu_quote
+            return futu_quote
+        security_quote_cache[key] = {}
+        return security_quote_cache[key]
 
     def fetch_security_quotes(keys):
         quotes = {}
-        sorted_keys = sorted(keys)
+        sorted_keys = sorted(set(normalize_quote_key(core, ticker, currency) for ticker, currency in keys))
         if not sorted_keys:
             return quotes
+        for key in sorted_keys:
+            if key in security_quote_cache:
+                quotes[key] = security_quote_cache[key]
+        fetch_keys = [key for key in sorted_keys if key not in security_quote_cache]
+        if not fetch_keys:
+            return quotes
         total = len(sorted_keys)
-        emit_progress("获取行情", f"准备获取 {total} 个标的的现价和昨日收盘。", 42)
-        workers = min(4, len(sorted_keys))
-        completed = 0
-        with ThreadPoolExecutor(max_workers=workers) as executor:
-            future_map = {
-                executor.submit(fetch_security_quote, ticker, currency): (ticker, currency)
-                for ticker, currency in sorted_keys
-            }
-            for future in as_completed(future_map):
-                ticker, currency = future_map[future]
-                try:
-                    quotes[(ticker, currency)] = future.result()
-                except Exception:
-                    quotes[(ticker, currency)] = {}
-                completed += 1
-                percent = 42 + (completed / total) * 24
-                currency_label = display_currency_label(core, currency)
-                emit_progress("获取行情", f"等待实时行情 {completed}/{total}：{ticker} {currency_label}", percent)
+        emit_progress("获取行情", f"批量获取 {len(fetch_keys)} 个标的的公开行情。", 42)
+
+        quotes.update(fetch_eastmoney_security_quotes(core, fetch_keys))
+        for key, quote in quotes.items():
+            if key in fetch_keys:
+                security_quote_cache[key] = quote
+        emit_progress("获取行情", f"东方财富批量行情完成，已取到 {len(quotes)}/{total}。", 52)
+
+        missing_keys = [key for key in fetch_keys if not quote_has_price(quotes.get(key))]
+        if missing_keys:
+            tencent_quotes = fetch_tencent_security_quotes(core, missing_keys)
+            quotes.update(tencent_quotes)
+            security_quote_cache.update(tencent_quotes)
+            emit_progress("获取行情", f"腾讯行情兜底完成，已取到 {sum(1 for key in sorted_keys if quote_has_price(quotes.get(key)))}/{total}。", 60)
+
+        missing_keys = [key for key in fetch_keys if not quote_has_price(quotes.get(key))]
+        if missing_keys:
+            workers = min(6, len(missing_keys))
+            completed = 0
+            with ThreadPoolExecutor(max_workers=workers) as executor:
+                future_map = {
+                    executor.submit(fetch_security_quote, ticker, currency): (ticker, currency)
+                    for ticker, currency in missing_keys
+                }
+                for future in as_completed(future_map):
+                    ticker, currency = future_map[future]
+                    try:
+                        quotes[(ticker, currency)] = future.result()
+                    except Exception:
+                        quotes[(ticker, currency)] = {}
+                    security_quote_cache[(ticker, currency)] = quotes[(ticker, currency)]
+                    completed += 1
+                    percent = 60 + (completed / len(missing_keys)) * 8
+                    emit_progress("获取行情", f"补充行情 {completed}/{len(missing_keys)}：{ticker}", percent)
+
         for ticker, currency in sorted_keys:
             quote = quotes.get((ticker, currency), {})
-            if not isinstance(quote.get("last_price"), (int, float)):
-                emit_progress("重试行情", f"{ticker} {display_currency_label(core, currency)} 首次未取到现价，正在重试。", 68)
-                quotes[(ticker, currency)] = fetch_security_quote(ticker, currency)
+            if not quote_has_price(quote):
+                emit_progress("行情缺失", f"{ticker} {display_currency_label(core, currency)} 暂未取到公开现价。", 68)
+                quotes[(ticker, currency)] = {}
+                security_quote_cache[(ticker, currency)] = {}
         return quotes
 
     core.fetch_security_quote = fetch_security_quote

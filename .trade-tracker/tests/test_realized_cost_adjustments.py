@@ -10,7 +10,7 @@ from unittest.mock import patch
 TOOLS_DIR = Path(__file__).resolve().parents[1] / "tools"
 sys.path.insert(0, str(TOOLS_DIR))
 
-from trade_tracker.market_data import parse_hkex_option_detail
+from trade_tracker.market_data import eastmoney_quote_from_row, parse_hkex_option_detail, tencent_quote_from_payload
 from trade_tracker.options import build_stock_realized_income_maps, open_option_mark_for_row, patch_dashboard_data_with_options
 
 
@@ -269,6 +269,34 @@ class RealizedCostAdjustmentTests(unittest.TestCase):
         price, as_of = parse_hkex_option_detail(html)
         self.assertEqual(price, 0.09)
         self.assertEqual(as_of, "13:30:00")
+
+    def test_parse_hkex_option_detail_prefers_bid_ask_midpoint(self):
+        html = """
+        Last Traded Price (As of 14:31:00) 0.370
+        Bid / Ask 0.360 / 0.380
+        """
+        price, as_of = parse_hkex_option_detail(html)
+        self.assertAlmostEqual(price, 0.37)
+        self.assertEqual(as_of, "14:31:00")
+
+    def test_public_quote_parsers_support_batch_sources(self):
+        eastmoney_quote = eastmoney_quote_from_row(
+            FakeCore(),
+            ("00700", "HKD"),
+            {"f14": "腾讯控股", "f2": 468800, "f1": 3, "f18": 479200},
+        )
+        self.assertEqual(eastmoney_quote["name"], "腾讯控股")
+        self.assertEqual(eastmoney_quote["last_price"], 468.8)
+        self.assertEqual(eastmoney_quote["prev_close"], 479.2)
+
+        tencent_quote = tencent_quote_from_payload(
+            FakeCore(),
+            ("TSLA", "USD"),
+            "200~特斯拉~TSLA.OQ~372.80~376.02",
+        )
+        self.assertEqual(tencent_quote["name"], "特斯拉")
+        self.assertEqual(tencent_quote["last_price"], 372.8)
+        self.assertEqual(tencent_quote["prev_close"], 376.02)
 
 
 if __name__ == "__main__":

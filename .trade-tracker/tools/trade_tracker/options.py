@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+from concurrent.futures import ThreadPoolExecutor, as_completed
 from datetime import date
 
 from . import state
@@ -119,9 +120,61 @@ def open_option_mark_for_row(core, cells: dict[int, object], quote_cache: dict[t
     return option_key_from_cells(core, cells), mark
 
 
+def option_quote_request_for_row(core, cells: dict[int, object]) -> tuple[tuple[str, str, str, str, str], str, str, str, str, float] | None:
+    event = raw_text_value(core, cells, 6)
+    if event not in OPTION_EVENTS:
+        return None
+    if excel_serial_to_date(cell_raw(cells, 4)) is not None or raw_number(cells, 10) is not None:
+        return None
+    ticker = core.normalize_ticker(cell_raw(cells, 5), cell_raw(cells, 20))
+    currency_raw = core.normalize_currency(cell_raw(cells, 20))
+    expiry = excel_serial_to_date(cell_raw(cells, 3))
+    expiry_text = expiry.strftime("%Y/%m/%d") if expiry else raw_text_value(core, cells, 3)
+    strike = raw_number(cells, 7)
+    qty = raw_number(cells, 8)
+    open_price = raw_number(cells, 9)
+    if not ticker or not currency_raw or strike is None or qty in (None, 0) or open_price is None:
+        return None
+    quote_key = (ticker, currency_raw, event, expiry_text, number_key(strike))
+    return quote_key, ticker, currency_raw, event, expiry_text, strike
+
+
+def prefetch_open_option_quotes(core, candidates: list[dict[int, object]]) -> dict[tuple[str, str, str, str, str], dict | None]:
+    quote_cache: dict[tuple[str, str, str, str, str], dict | None] = {}
+    requests = []
+    seen = set()
+    for cells in candidates:
+        request = option_quote_request_for_row(core, cells)
+        if not request:
+            continue
+        quote_key = request[0]
+        if quote_key in seen:
+            continue
+        seen.add(quote_key)
+        requests.append(request)
+    if not requests:
+        return quote_cache
+
+    workers = min(3, len(requests))
+    completed = 0
+    with ThreadPoolExecutor(max_workers=workers) as executor:
+        future_map = {
+            executor.submit(fetch_option_quote, core, ticker, currency_raw, event, expiry_text, strike): quote_key
+            for quote_key, ticker, currency_raw, event, expiry_text, strike in requests
+        }
+        for future in as_completed(future_map):
+            quote_key = future_map[future]
+            try:
+                quote_cache[quote_key] = future.result()
+            except Exception:
+                quote_cache[quote_key] = None
+            completed += 1
+            emit_progress("获取期权行情", f"公开期权行情 {completed}/{len(requests)}：{quote_key[0]} {quote_key[3]} {quote_key[4]}", 72 + (completed / len(requests)) * 8)
+    return quote_cache
+
+
 def build_open_option_marks(core, rows: list[tuple[int, dict[int, object]]]) -> dict[tuple[str, str, str, str, str, str, str, str], dict[str, str]]:
     marks: dict[tuple[str, str, str, str, str, str, str, str], dict[str, str]] = {}
-    quote_cache: dict[tuple[str, str, str, str, str], dict | None] = {}
     candidates = [
         cells
         for _row_number, cells in rows
@@ -131,6 +184,7 @@ def build_open_option_marks(core, rows: list[tuple[int, dict[int, object]]]) -> 
     ]
     if candidates:
         emit_progress("获取期权行情", f"匹配 {len(candidates)} 条未平仓期权，包含 covered call / cash-secured put。", 72)
+    quote_cache = prefetch_open_option_quotes(core, candidates)
     for cells in candidates:
         option_mark = open_option_mark_for_row(core, cells, quote_cache)
         if option_mark:
