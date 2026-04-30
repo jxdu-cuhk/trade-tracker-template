@@ -14,6 +14,8 @@ from .html_tables import (
     insert_last_clear_date_column,
     insert_summary_holding_days_column,
     move_table_column,
+    normalize_legacy_holdings_table,
+    normalize_legacy_open_option_sections,
     prioritize_annual_summary_filter,
     prioritize_stock_summary_columns,
     remove_stock_summary_section,
@@ -87,6 +89,7 @@ def patch_core(core, workbook_path: Path) -> None:
             html = insert_summary_holding_days_column(html)
             return prioritize_stock_summary_columns(html)
         if summary_kind == "holdings":
+            html = normalize_legacy_holdings_table(core, html)
             html = insert_holding_metric_columns(core, html)
             return reorder_table_columns(html, HOLDINGS_COLUMN_ORDER)
         return html
@@ -106,6 +109,7 @@ def patch_core(core, workbook_path: Path) -> None:
         html = add_refresh_progress_panel(html)
         html = add_balanced_summary_table_script(html)
         html = add_holdings_cny_settlement_footer_script(html)
+        html = normalize_legacy_open_option_sections(core, html)
         return brand_dashboard_html(html)
 
     def render_root_launcher_html(*args, **kwargs):

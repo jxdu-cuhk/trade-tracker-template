@@ -3,12 +3,30 @@ from __future__ import annotations
 import html
 import json
 import re
+from datetime import date
 
 from . import state
 from .market_data import current_fx_rates_to_cny, display_currency_label
 from .settings import ANNUAL_STOCK_SUMMARY_COLUMN_ORDER, HOLDINGS_COLUMN_ORDER, STOCK_SUMMARY_COLUMN_ORDER
-from .utils import cell_text, parse_float
+from .utils import cell_text, date_key, parse_float
 from .options import option_key
+
+
+OPEN_OPTION_COLUMN_ORDER = [
+    "代码",
+    "名称",
+    "类型",
+    "事件",
+    "到期日",
+    "行权价",
+    "数量",
+    "乘数",
+    "开仓价",
+    "现价",
+    "浮动盈亏",
+    "占用本金",
+    "币种",
+]
 
 
 def move_cells(cells: list[str], label_from: str, label_after: str, labels: list[str] | None = None) -> list[str]:
@@ -244,6 +262,27 @@ def table_header_html(label: str) -> str:
         "最后清仓时间": ("text", "date"),
         "代码": ("text", "text"),
         "名称": ("text", "text"),
+        "类型": ("text", "text"),
+        "事件": ("text", "text"),
+        "到期日": ("text", "date"),
+        "行权价": ("text", "text"),
+        "数量": ("num", "number"),
+        "乘数": ("num", "number"),
+        "开仓价": ("money", "number"),
+        "现价": ("money", "number"),
+        "最新市值": ("money", "number"),
+        "浮动盈亏": ("money", "number"),
+        "盈亏率": ("percent", "number"),
+        "持股数": ("num", "number"),
+        "持仓成本": ("money", "number"),
+        "当日盈亏": ("money", "number"),
+        "个股仓位": ("percent", "number"),
+        "持股天数": ("num", "number"),
+        "持仓均价": ("money", "number"),
+        "回本空间": ("percent", "number"),
+        "方向": ("text", "text"),
+        "最近买入": ("text", "date"),
+        "占用本金": ("money", "number"),
         "已实现盈亏": ("money", "number"),
         "总盈亏": ("money", "number"),
         "总收益率": ("percent", "number"),
@@ -266,6 +305,27 @@ def default_td_for_label(label: str, value: str = "-") -> str:
         "最后清仓时间": "text",
         "代码": "text",
         "名称": "text",
+        "类型": "text",
+        "事件": "text",
+        "到期日": "text",
+        "行权价": "text",
+        "数量": "num",
+        "乘数": "num",
+        "开仓价": "money",
+        "现价": "money",
+        "最新市值": "money",
+        "浮动盈亏": "money",
+        "盈亏率": "percent",
+        "持股数": "num",
+        "持仓成本": "money",
+        "当日盈亏": "money",
+        "个股仓位": "percent",
+        "持股天数": "num",
+        "持仓均价": "money",
+        "回本空间": "percent",
+        "方向": "text",
+        "最近买入": "text",
+        "占用本金": "money",
         "已实现盈亏": "money",
         "总盈亏": "money",
         "总收益率": "percent",
@@ -374,6 +434,291 @@ def parse_money_cell(cell_html: str) -> tuple[str, float] | None:
     if value is None:
         return None
     return currency, value
+
+
+def value_class(value: float | None) -> str:
+    if value is None:
+        return ""
+    if value > 0:
+        return " value-positive"
+    if value < 0:
+        return " value-negative"
+    return ""
+
+
+def format_plain_number(value: float | None, decimals: int = 2) -> str:
+    if value is None:
+        return "-"
+    if abs(value) < 0.5 * (10 ** -decimals):
+        value = 0.0
+    return f"{value:,.{decimals}f}"
+
+
+def format_compact_number(value: float | None, max_decimals: int = 3) -> str:
+    if value is None:
+        return "-"
+    if abs(value) < 0.5 * (10 ** -max_decimals):
+        value = 0.0
+    return f"{value:,.{max_decimals}f}".rstrip("0").rstrip(".")
+
+
+def format_percent_cell(value: float | None) -> str:
+    if value is None:
+        return "-"
+    if value <= 0:
+        return "已回本"
+    return f"{value * 100:.2f}%"
+
+
+def cell_for_label(labels: list[str], cells: list[str], *names: str) -> str:
+    for name in names:
+        if name in labels:
+            index = labels.index(name)
+            if index < len(cells):
+                return cells[index]
+    return ""
+
+
+def text_for_label(labels: list[str], cells: list[str], *names: str) -> str:
+    return cell_text(cell_for_label(labels, cells, *names))
+
+
+def number_for_label(labels: list[str], cells: list[str], *names: str) -> float | None:
+    return parse_float(re.sub(r"^(人民币|港币|美元)\s+", "", text_for_label(labels, cells, *names)).replace("%", ""))
+
+
+def money_for_label(labels: list[str], cells: list[str], *names: str) -> tuple[str, float | None]:
+    cell = cell_for_label(labels, cells, *names)
+    parsed = parse_money_cell(cell)
+    if parsed:
+        return parsed
+    value = number_for_label(labels, cells, *names)
+    return "", value
+
+
+def infer_row_currency(labels: list[str], cells: list[str], fallback: str = "") -> str:
+    currency = text_for_label(labels, cells, "币种")
+    if currency and currency not in {"-", "--"}:
+        return currency
+    for label in ("最新市值", "持仓成本", "浮动盈亏", "未实现盈亏", "当日盈亏", "占用本金"):
+        parsed_currency, value = money_for_label(labels, cells, label)
+        if parsed_currency and value is not None:
+            return parsed_currency
+    return fallback or "-"
+
+
+def safe_lookup_name(core, code: str, currency: str) -> str:
+    existing = ""
+    if code:
+        try:
+            existing = core.lookup_security_name(code, currency, False)
+        except Exception:
+            existing = ""
+    return existing or "-"
+
+
+def td_for_label(label: str, value: str, sort_value: float | None = None, color_value: float | None = None) -> str:
+    cell = default_td_for_label(label, value)
+    if color_value is not None:
+        cell = cell.replace('class="', f'class="{value_class(color_value).strip()} ', 1)
+    if sort_value is not None:
+        cell = set_td_sort_value(cell, sort_value)
+    return cell
+
+
+def replace_table_header_and_body(table_html: str, columns: list[str], body_rows: list[str]) -> str:
+    header_html = "".join(table_header_html(label) for label in columns)
+    body_html = "\n      " + "".join(body_rows) + "\n    "
+    updated = re.sub(
+        r"(<thead>\s*<tr>)(.*?)(</tr>\s*</thead>)",
+        lambda match: match.group(1) + header_html + match.group(3),
+        table_html,
+        count=1,
+        flags=re.S,
+    )
+    updated = re.sub(
+        r"(<tbody>\s*)(.*?)(\s*</tbody>)",
+        lambda match: match.group(1) + body_html + match.group(3),
+        updated,
+        count=1,
+        flags=re.S,
+    )
+    return re.sub(r"\s*<tfoot\b[^>]*>.*?</tfoot>", "", updated, flags=re.S)
+
+
+def row_cells_from_tbody(table_html: str) -> tuple[list[str], list[tuple[str, list[str], str]]]:
+    header_match = re.search(r"<thead>\s*<tr>(.*?)</tr>\s*</thead>", table_html, re.S)
+    body_match = re.search(r"<tbody>\s*(.*?)\s*</tbody>", table_html, re.S)
+    if not header_match or not body_match:
+        return [], []
+    labels = [cell_text(cell) for cell in re.findall(r"<th\b[^>]*>.*?</th>", header_match.group(1), re.S)]
+    rows = []
+    for row_match in re.finditer(r"(<tr\b[^>]*>)(.*?)(</tr>)", body_match.group(1), re.S):
+        cells = re.findall(r"<td\b[^>]*>.*?</td>", row_match.group(2), re.S)
+        rows.append((row_match.group(1), cells, row_match.group(3)))
+    return labels, rows
+
+
+def normalize_legacy_holdings_table(core, table_html: str) -> str:
+    labels, rows = row_cells_from_tbody(table_html)
+    if not labels or all(label in labels for label in HOLDINGS_COLUMN_ORDER):
+        return table_html
+    if "代码" not in labels or "最新市值" not in labels:
+        return table_html
+
+    body_rows = []
+    for row_prefix, cells, row_suffix in rows:
+        if len(cells) != len(labels):
+            body_rows.append(row_prefix + "".join(cells) + row_suffix)
+            continue
+        code = text_for_label(labels, cells, "代码")
+        currency = infer_row_currency(labels, cells)
+        name = text_for_label(labels, cells, "名称") or safe_lookup_name(core, code, currency)
+        market_currency, market_value = money_for_label(labels, cells, "最新市值")
+        cost_currency, cost_value = money_for_label(labels, cells, "持仓成本")
+        pnl_currency, pnl_value = money_for_label(labels, cells, "浮动盈亏", "未实现盈亏")
+        daily_currency, daily_value = money_for_label(labels, cells, "当日盈亏")
+        price_value = number_for_label(labels, cells, "现价")
+        qty_value = number_for_label(labels, cells, "持股数", "数量")
+        open_date = text_for_label(labels, cells, "最近买入", "开仓")
+        normalized_currency = currency if currency != "-" else market_currency or cost_currency or pnl_currency or daily_currency or "-"
+        side = text_for_label(labels, cells, "方向")
+        if not side or side == "-":
+            side = "空头" if (qty_value is not None and qty_value < 0) or (market_value is not None and market_value < 0) else "多头"
+        avg_cost = cost_value / abs(qty_value) if cost_value is not None and qty_value not in (None, 0) else None
+        pnl_rate = pnl_value / cost_value if pnl_value is not None and cost_value not in (None, 0) else None
+        breakeven = None
+        if cost_value is not None and market_value not in (None, 0):
+            if "空头" in side:
+                breakeven = abs(market_value) / cost_value - 1
+            else:
+                breakeven = cost_value / abs(market_value) - 1
+        days = text_for_label(labels, cells, "持股天数")
+        if not days or days == "-":
+            opened = date_key(open_date)
+            days = str(max(1, (date.today() - opened).days)) if opened else "-"
+
+        canonical = {
+            "代码": td_for_label("代码", code or "-"),
+            "名称": td_for_label("名称", name or "-"),
+            "最新市值": td_for_label("最新市值", format_plain_number(market_value), market_value, market_value),
+            "浮动盈亏": td_for_label("浮动盈亏", format_plain_number(pnl_value), pnl_value, pnl_value),
+            "盈亏率": td_for_label("盈亏率", format_percent(pnl_rate), pnl_rate, pnl_rate),
+            "持股数": td_for_label("持股数", format_compact_number(qty_value), qty_value),
+            "现价": td_for_label("现价", format_compact_number(price_value), price_value),
+            "持仓成本": td_for_label("持仓成本", format_plain_number(cost_value), cost_value),
+            "当日盈亏": td_for_label("当日盈亏", format_plain_number(daily_value), daily_value, daily_value),
+            "个股仓位": td_for_label("个股仓位", "-"),
+            "持股天数": td_for_label("持股天数", days, parse_float(days.replace(",", "")) if days != "-" else None),
+            "持仓均价": td_for_label("持仓均价", format_compact_number(avg_cost), avg_cost),
+            "回本空间": td_for_label("回本空间", format_percent_cell(breakeven), breakeven),
+            "方向": td_for_label("方向", side),
+            "币种": td_for_label("币种", display_currency_label(core, normalized_currency)),
+            "最近买入": td_for_label("最近买入", open_date or "-"),
+        }
+        body_rows.append(row_prefix + "".join(canonical[label] for label in HOLDINGS_COLUMN_ORDER) + row_suffix)
+    return replace_table_header_and_body(table_html, HOLDINGS_COLUMN_ORDER, body_rows)
+
+
+def normalize_legacy_open_option_table(core, table_html: str) -> str:
+    labels, rows = row_cells_from_tbody(table_html)
+    if not labels or all(label in labels for label in OPEN_OPTION_COLUMN_ORDER):
+        return table_html
+    if "代码" not in labels or "事件" not in labels or not any(label in labels for label in ("到期", "到期日")):
+        return table_html
+
+    body_rows = []
+    for row_prefix, cells, row_suffix in rows:
+        if len(cells) != len(labels):
+            body_rows.append(row_prefix + "".join(cells) + row_suffix)
+            continue
+        code = text_for_label(labels, cells, "代码")
+        currency = infer_row_currency(labels, cells)
+        name = text_for_label(labels, cells, "名称") or safe_lookup_name(core, code, currency)
+        raw_qty = number_for_label(labels, cells, "数量")
+        qty = abs(raw_qty) if raw_qty is not None else None
+        trade_type = text_for_label(labels, cells, "类型") or ("卖出" if raw_qty is not None and raw_qty < 0 else "买入")
+        event = text_for_label(labels, cells, "事件")
+        expiry = text_for_label(labels, cells, "到期日", "到期")
+        strike = number_for_label(labels, cells, "行权价")
+        multiplier = number_for_label(labels, cells, "乘数") or 100
+        open_price = number_for_label(labels, cells, "开仓价")
+        current_price = number_for_label(labels, cells, "现价")
+        _pnl_currency, pnl_value = money_for_label(labels, cells, "浮动盈亏", "未实现盈亏")
+        _capital_currency, capital = money_for_label(labels, cells, "占用本金")
+        normalized_currency = display_currency_label(core, currency)
+        quote_key = option_key(
+            code,
+            trade_type,
+            event,
+            expiry,
+            format_compact_number(strike),
+            format_compact_number(qty),
+            format_compact_number(multiplier),
+            format_compact_number(open_price),
+            normalized_currency,
+        )
+        mark = state.OPEN_OPTION_MARKS.get(quote_key, {})
+        mark_current_price = mark.get("current_price")
+        mark_float_pnl = mark.get("float_pnl")
+        mark_capital = mark.get("capital")
+        if mark_current_price and mark_current_price != "-":
+            current_price = parse_float(mark_current_price)
+        if mark_float_pnl and mark_float_pnl != "-":
+            pnl_value = parse_float(mark_float_pnl)
+        if mark_capital and mark_capital != "-":
+            capital = parse_float(mark_capital)
+        if capital is None and strike is not None and qty is not None:
+            capital = abs(strike * qty * multiplier)
+        pnl_color = pnl_value
+        if mark.get("float_pnl_class") == "value-positive":
+            pnl_color = abs(pnl_value or 0)
+        elif mark.get("float_pnl_class") == "value-negative":
+            pnl_color = -abs(pnl_value or 0)
+        canonical = {
+            "代码": td_for_label("代码", code or "-"),
+            "名称": td_for_label("名称", name or "-"),
+            "类型": td_for_label("类型", trade_type),
+            "事件": td_for_label("事件", event or "-"),
+            "到期日": td_for_label("到期日", expiry or "-"),
+            "行权价": td_for_label("行权价", format_compact_number(strike), strike),
+            "数量": td_for_label("数量", format_compact_number(qty), qty),
+            "乘数": td_for_label("乘数", format_compact_number(multiplier), multiplier),
+            "开仓价": td_for_label("开仓价", format_compact_number(open_price), open_price),
+            "现价": td_for_label(
+                "现价",
+                mark_current_price if mark_current_price and mark_current_price != "-" else format_compact_number(current_price),
+                current_price,
+            ),
+            "浮动盈亏": td_for_label(
+                "浮动盈亏",
+                mark_float_pnl if mark_float_pnl and mark_float_pnl != "-" else format_plain_number(pnl_value),
+                pnl_value,
+                pnl_color,
+            ),
+            "占用本金": td_for_label("占用本金", format_plain_number(capital), capital),
+            "币种": td_for_label("币种", normalized_currency),
+        }
+        body_rows.append(row_prefix + "".join(canonical[label] for label in OPEN_OPTION_COLUMN_ORDER) + row_suffix)
+    return replace_table_header_and_body(table_html, OPEN_OPTION_COLUMN_ORDER, body_rows)
+
+
+def normalize_legacy_open_option_sections(core, html_text: str) -> str:
+    pattern = (
+        r'(<h2 class="section-title">未平仓期权</h2>.*?<table\b[^>]*class="[^"]*\bsummary-table\b[^"]*"[^>]*>)'
+        r"(.*?)"
+        r"(</table>)"
+    )
+
+    def normalize(match: re.Match[str]) -> str:
+        table_html = match.group(1) + match.group(2) + match.group(3)
+        return normalize_legacy_open_option_table(core, table_html)
+
+    normalized = re.sub(pattern, normalize, html_text, flags=re.S)
+    return normalized.replace(
+        "只要期权那一行还没有平仓价，就会继续留在这里，方便你盯到期日。",
+        "只要期权那一行还没有平仓价，就会继续留在这里；现价和浮动盈亏会优先通过 HKEX 等公开行情源匹配期权链，Futu OpenD 仅作为兜底，取不到时显示 -。",
+    )
 
 
 def format_percent(value: float | None) -> str:

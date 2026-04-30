@@ -11,7 +11,9 @@ TOOLS_DIR = Path(__file__).resolve().parents[1] / "tools"
 sys.path.insert(0, str(TOOLS_DIR))
 
 from trade_tracker.market_data import eastmoney_quote_from_row, parse_hkex_option_detail, tencent_quote_from_payload
+from trade_tracker.html_tables import normalize_legacy_holdings_table, normalize_legacy_open_option_sections
 from trade_tracker.options import build_stock_realized_income_maps, open_option_mark_for_row, patch_dashboard_data_with_options
+from trade_tracker import state
 
 
 class Cell:
@@ -297,6 +299,72 @@ class RealizedCostAdjustmentTests(unittest.TestCase):
         self.assertEqual(tencent_quote["name"], "特斯拉")
         self.assertEqual(tencent_quote["last_price"], 372.8)
         self.assertEqual(tencent_quote["prev_close"], 376.02)
+
+    def test_legacy_public_holdings_table_is_normalized_to_full_columns(self):
+        html = """
+        <table class="summary-table">
+        <thead><tr><th>代码</th><th>数量</th><th>最新市值</th><th>持仓成本</th><th>浮动盈亏</th><th>现价</th><th>开仓</th></tr></thead>
+        <tbody><tr><td>DEMO</td><td>3</td><td>美元 1,985.13</td><td>美元 1,986.00</td><td>美元 -0.87</td><td>661.71</td><td>2026-04-30</td></tr></tbody>
+        </table>
+        """
+        normalized = normalize_legacy_holdings_table(FakeCore(), html)
+
+        for header in ("名称", "盈亏率", "持股数", "当日盈亏", "个股仓位", "持股天数", "持仓均价", "回本空间", "方向", "币种", "最近买入"):
+            self.assertIn(f">{header}</th>", normalized)
+        self.assertIn(">662<", normalized)
+        self.assertIn(">-0.04%</td>", normalized)
+        self.assertIn(">多头</td>", normalized)
+        self.assertIn(">美元</td>", normalized)
+
+    def test_legacy_public_open_option_table_is_normalized_to_full_columns(self):
+        html = """
+        <section>
+        <h2 class="section-title">未平仓期权</h2>
+        <table class="summary-table">
+        <thead><tr><th>代码</th><th>事件</th><th>到期</th><th>行权价</th><th>数量</th><th>开仓价</th><th>现价</th><th>未实现盈亏</th></tr></thead>
+        <tbody><tr><td>DEMO</td><td>认沽</td><td>2026-05-29</td><td>80</td><td>-3</td><td>6.413</td><td>9.82</td><td>美元 -1,021.95</td></tr></tbody>
+        </table>
+        </section>
+        """
+        normalized = normalize_legacy_open_option_sections(FakeCore(), html)
+
+        for header in ("名称", "类型", "到期日", "乘数", "浮动盈亏", "占用本金", "币种"):
+            self.assertIn(f">{header}</th>", normalized)
+        self.assertIn(">卖出</td>", normalized)
+        self.assertIn(">3</td>", normalized)
+        self.assertIn(">100</td>", normalized)
+        self.assertIn(">24,000.00</td>", normalized)
+        self.assertIn(">美元</td>", normalized)
+
+    def test_normalized_option_table_preserves_prefetched_marks(self):
+        html = """
+        <section>
+        <h2 class="section-title">未平仓期权</h2>
+        <p>只要期权那一行还没有平仓价，就会继续留在这里，方便你盯到期日。</p>
+        <table class="summary-table">
+        <thead><tr><th>代码</th><th>名称</th><th>类型</th><th>事件</th><th>到期日</th><th>行权价</th><th>数量</th><th>乘数</th><th>开仓价</th><th>币种</th></tr></thead>
+        <tbody><tr><td>DEMO</td><td>示例标的</td><td>卖出</td><td>认购</td><td>2026/05/28</td><td>32</td><td>5</td><td>1000</td><td>0.55</td><td>港币</td></tr></tbody>
+        </table>
+        </section>
+        """
+        previous = dict(state.OPEN_OPTION_MARKS)
+        state.OPEN_OPTION_MARKS = {
+            ("DEMO", "卖出", "认购", "2026/05/28", "32", "5", "1000", "0.55", "港币"): {
+                "current_price": "0.38",
+                "float_pnl": "814.50",
+                "float_pnl_class": "value-positive",
+                "capital": "196,060.00",
+            }
+        }
+        try:
+            normalized = normalize_legacy_open_option_sections(FakeCore(), html)
+        finally:
+            state.OPEN_OPTION_MARKS = previous
+
+        self.assertIn(">0.38</td>", normalized)
+        self.assertIn(">814.50</td>", normalized)
+        self.assertIn(">196,060.00</td>", normalized)
+        self.assertIn("HKEX 等公开行情源", normalized)
 
 
 if __name__ == "__main__":
