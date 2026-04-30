@@ -101,7 +101,7 @@ def add_open_option_mark_columns_to_html(html_text: str) -> str:
     section_text = section_text.replace(table_prefix + table_body + table_suffix, updated_section)
     section_text = section_text.replace(
         "只要期权那一行还没有平仓价，就会继续留在这里，方便你盯到期日。",
-        "只要期权那一行还没有平仓价，就会继续留在这里；现价和浮动盈亏会优先通过富途 OpenD 匹配期权链，取不到时显示 -。",
+        "只要期权那一行还没有平仓价，就会继续留在这里；现价和浮动盈亏会优先通过 HKEX 等公开行情源匹配期权链，Futu OpenD 仅作为兜底，取不到时显示 -。",
         1,
     )
     return html_text[: section_match.start()] + section_text + html_text[section_match.end() :]

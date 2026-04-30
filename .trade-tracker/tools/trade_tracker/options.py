@@ -3,7 +3,7 @@ from __future__ import annotations
 from datetime import date
 
 from . import state
-from .market_data import display_currency_label, fetch_futu_option_quote
+from .market_data import display_currency_label, fetch_option_quote
 from .runtime import emit_progress
 from .settings import OPTION_EVENTS
 from .utils import cell_raw, clean_text, core_trade_type, excel_serial_to_date, format_currency_amounts, format_money_text, format_signed_percent, parse_display_number, raw_number, raw_text_value
@@ -100,7 +100,7 @@ def open_option_mark_for_row(core, cells: dict[int, object], quote_cache: dict[t
 
     quote_key = (ticker, currency_raw, event, expiry_text, number_key(strike))
     if quote_key not in quote_cache:
-        quote_cache[quote_key] = fetch_futu_option_quote(core, ticker, currency_raw, event, expiry_text, strike)
+        quote_cache[quote_key] = fetch_option_quote(core, ticker, currency_raw, event, expiry_text, strike)
     quote = quote_cache.get(quote_key) or {}
     current_price = quote.get("last_price") if isinstance(quote, dict) else None
     pnl = (

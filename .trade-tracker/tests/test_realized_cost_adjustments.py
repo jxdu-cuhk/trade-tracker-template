@@ -10,6 +10,7 @@ from unittest.mock import patch
 TOOLS_DIR = Path(__file__).resolve().parents[1] / "tools"
 sys.path.insert(0, str(TOOLS_DIR))
 
+from trade_tracker.market_data import parse_hkex_option_detail
 from trade_tracker.options import build_stock_realized_income_maps, open_option_mark_for_row, patch_dashboard_data_with_options
 
 
@@ -235,7 +236,7 @@ class RealizedCostAdjustmentTests(unittest.TestCase):
         self.assertEqual(holding["float_pnl"], "人民币 248.00")
         self.assertEqual(holding["breakeven"], "已回本")
 
-    def test_open_cash_secured_put_mark_uses_futu_quote(self):
+    def test_open_cash_secured_put_mark_uses_option_quote(self):
         open_put = row(
             kind="卖出",
             open_date=46140,
@@ -251,13 +252,23 @@ class RealizedCostAdjustmentTests(unittest.TestCase):
             currency="人民币",
         )
 
-        with patch("trade_tracker.options.fetch_futu_option_quote", return_value={"option_code": "OPT", "last_price": 0.2}):
+        with patch("trade_tracker.options.fetch_option_quote", return_value={"option_code": "OPT", "last_price": 0.2}):
             _key, mark = open_option_mark_for_row(FakeCore(), open_put, {})
 
         self.assertEqual(mark["current_price"], "0.2")
         self.assertEqual(mark["float_pnl"], "28.00")
         self.assertEqual(mark["float_pnl_class"], "value-positive")
         self.assertEqual(mark["capital"], "1,000.00")
+
+    def test_parse_hkex_option_detail_price(self):
+        html = """
+        <span class="floatleft col1a"><strong>Last Traded Price<br />
+        (As of 13:30:00)</strong></span>
+        <span class="floatright col1b"><strong>0.090</strong></span>
+        """
+        price, as_of = parse_hkex_option_detail(html)
+        self.assertEqual(price, 0.09)
+        self.assertEqual(as_of, "13:30:00")
 
 
 if __name__ == "__main__":

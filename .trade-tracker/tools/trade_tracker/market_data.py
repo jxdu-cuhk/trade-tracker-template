@@ -4,6 +4,7 @@ import json
 import re
 import socket
 from concurrent.futures import ThreadPoolExecutor, as_completed
+from urllib.parse import urlencode
 from urllib.error import URLError
 from urllib.request import Request, urlopen
 
@@ -172,6 +173,137 @@ def option_expiry_for_futu(expiry: str) -> str:
     return f"{year:04d}-{month:02d}-{day:02d}"
 
 
+def format_option_strike(strike) -> str:
+    strike_value = parse_float(strike)
+    if strike_value is None:
+        return clean_text(strike)
+    return f"{strike_value:.8f}".rstrip("0").rstrip(".")
+
+
+def strip_hkex_hanweb_header(text: str) -> str:
+    marker = "<!--SORC_HACK_HANWEB_END-->"
+    if marker in text:
+        return text.split(marker, 1)[1]
+    return text
+
+
+def hkex_option_type_for_event(event: str) -> str:
+    option_kind = futu_option_type_for_event(event)
+    if option_kind == "CALL":
+        return "C"
+    if option_kind == "PUT":
+        return "P"
+    return ""
+
+
+def request_hkex_option_page(data: dict[str, str] | None = None, option_id: str | None = None, ucode: str = "") -> str:
+    base_url = "https://www.hkex.com.hk/eng/sorc/options/stock_options_detail.aspx"
+    if option_id:
+        url = f"{base_url}?oID={option_id}&ucode={ucode}"
+        request = Request(url, headers={"User-Agent": "Mozilla/5.0"})
+    else:
+        request = Request(
+            base_url,
+            data=urlencode(data or {}).encode("utf-8"),
+            headers={
+                "User-Agent": "Mozilla/5.0",
+                "Content-Type": "application/x-www-form-urlencoded",
+                "Referer": base_url,
+            },
+        )
+    with urlopen(request, timeout=6) as response:
+        return response.read().decode("utf-8", "ignore")
+
+
+def fetch_hkex_option_id(core, ticker, event, expiry, strike) -> str | None:
+    underlying = core.normalize_ticker(ticker, "HKD").zfill(5)
+    option_type = hkex_option_type_for_event(str(event or ""))
+    expiry_text = option_expiry_for_futu(str(expiry or ""))
+    strike_text = format_option_strike(strike)
+    if not underlying or not option_type or not expiry_text or not strike_text:
+        return None
+
+    try:
+        html = request_hkex_option_page(
+            {
+                "action": "ajax",
+                "type": "list",
+                "underlying": underlying,
+                "otype": option_type,
+                "expiry": expiry_text,
+                "strike": strike_text,
+                "page": "1",
+                "lang": "en",
+            }
+        )
+    except (TimeoutError, URLError, OSError):
+        return None
+
+    html = strip_hkex_hanweb_header(html)
+    match = re.search(r"oID=(\d+)&ucode=" + re.escape(underlying), html)
+    if match:
+        return match.group(1)
+    return None
+
+
+def parse_hkex_option_detail(html: str) -> tuple[float | None, str]:
+    price = None
+    as_of = ""
+    price_match = re.search(
+        r"Last Traded Price.*?\(As of\s*([^)]*)\).*?<span class=\"floatright col1b\"><strong>\s*([^<]+?)\s*</strong>",
+        html,
+        re.S | re.I,
+    )
+    if price_match:
+        as_of = clean_text(price_match.group(1))
+        price = parse_float(price_match.group(2))
+    return price, as_of
+
+
+def fetch_hkex_option_chart_last(option_id: str) -> float | None:
+    request = Request(
+        "https://www.hkex.com.hk/eng/sorc/swf/chartdata/chart.aspx",
+        data=urlencode({"type": "1", "oID": option_id}).encode("utf-8"),
+        headers={
+            "User-Agent": "Mozilla/5.0",
+            "Content-Type": "application/x-www-form-urlencoded",
+        },
+    )
+    try:
+        with urlopen(request, timeout=6) as response:
+            payload = json.loads(response.read().decode("utf-8", "ignore"))
+    except (TimeoutError, URLError, OSError, ValueError):
+        return None
+    rows = payload.get("data") if isinstance(payload, dict) else None
+    if not isinstance(rows, list) or not rows:
+        return None
+    return parse_float(rows[0].get("olast") if isinstance(rows[0], dict) else None)
+
+
+def fetch_hkex_option_quote(core, ticker, currency, event, expiry, strike) -> dict | None:
+    if core.normalize_currency(currency) != "HKD":
+        return None
+    underlying = core.normalize_ticker(ticker, currency).zfill(5)
+    option_id = fetch_hkex_option_id(core, underlying, event, expiry, strike)
+    if not option_id:
+        return None
+    try:
+        html = request_hkex_option_page(option_id=option_id, ucode=underlying)
+    except (TimeoutError, URLError, OSError):
+        html = ""
+    last_price, as_of = parse_hkex_option_detail(html)
+    if last_price is None:
+        last_price = fetch_hkex_option_chart_last(option_id)
+    if last_price is None:
+        return None
+    return {
+        "option_code": f"HKEX:{option_id}",
+        "last_price": last_price,
+        "source": "HKEX",
+        "as_of": as_of,
+    }
+
+
 def fetch_futu_option_quote(core, ticker, currency, event, expiry, strike) -> dict | None:
     if not futu_opend_available():
         return None
@@ -246,6 +378,13 @@ def fetch_futu_option_quote(core, ticker, currency, event, expiry, strike) -> di
             quote_ctx.close()
         except Exception:
             pass
+
+
+def fetch_option_quote(core, ticker, currency, event, expiry, strike) -> dict | None:
+    quote = fetch_hkex_option_quote(core, ticker, currency, event, expiry, strike)
+    if isinstance(quote, dict) and isinstance(quote.get("last_price"), (int, float)):
+        return quote
+    return fetch_futu_option_quote(core, ticker, currency, event, expiry, strike)
 
 
 def infer_secid(core, ticker, currency) -> str | None:
