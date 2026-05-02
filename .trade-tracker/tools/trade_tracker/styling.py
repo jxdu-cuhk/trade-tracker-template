@@ -247,6 +247,19 @@ def compact_preview_table_spacing(output_dir: Path) -> None:
   font-size: 12px;
 }}
 
+.clearance-analysis {{
+  display: grid;
+  gap: 14px;
+}}
+
+.clearance-subtitle {{
+  margin: 4px 0 -4px;
+  color: #202124;
+  font-size: 15px;
+  line-height: 1.25;
+  font-weight: 800;
+}}
+
 @media (max-width: 1180px) {{
   .currency-overview-grid {{
     grid-template-columns: repeat(2, minmax(0, 1fr));

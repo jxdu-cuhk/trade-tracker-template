@@ -5,6 +5,7 @@ from pathlib import Path
 from . import state
 from .analytics import build_holding_days_map, build_last_clear_date_map, build_summary_holding_days_maps
 from .branding import brand_dashboard_html, brand_launcher_html
+from .clearance_analysis import insert_clearance_analysis_section
 from .dividends import load_dividend_events
 from .html_tables import (
     add_balanced_summary_table_script,
@@ -108,6 +109,7 @@ def patch_core(core, workbook_path: Path) -> None:
         html = annotate_holdings_fx_note(html)
         html = align_annual_summary_with_stock_summary(html)
         html = prioritize_annual_summary_filter(html)
+        html = insert_clearance_analysis_section(core, html, rows)
         html = remove_stock_summary_section(html)
         html = add_refresh_progress_panel(html)
         html = add_balanced_summary_table_script(html)
