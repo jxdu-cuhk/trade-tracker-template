@@ -699,6 +699,11 @@ details[data-ths-return-curve] .curve-benchmark-dot {{
   fill: #4285f4;
 }}
 
+details[data-ths-return-curve] .curve-hover-capture {{
+  fill: transparent;
+  pointer-events: all;
+}}
+
 details[data-ths-return-curve] .curve-hover-layer {{
   pointer-events: none;
 }}

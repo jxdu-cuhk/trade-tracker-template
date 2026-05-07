@@ -195,7 +195,7 @@ def apply_tonghuashun_curve_style(html_text: str) -> str:
     )
     section = re.sub(
         r'<p class="section-note">.*?</p>',
-        '<p class="section-note">港币和美元按当前汇率折成人民币后合并展示；红线按区间持仓资金归一，蓝线对比上证指数。</p>',
+        '<p class="section-note">红线为历史每天的总盈亏：截至当天已实现盈亏 + 当天仍持仓的收盘浮盈/浮亏；买入当天只记入持仓基准，下一组可比收盘点开始贡献波动。港币和美元按当前汇率折成人民币后合并展示，蓝线对比上证指数。</p>',
         section,
         count=1,
         flags=re.S,

@@ -48,6 +48,11 @@ class FakeCore:
         return {"pnl": 29.0, "capital": 1001.0, "days": 4}
 
 
+class ImportedAggregateCore(FakeCore):
+    def compute_row_metrics(self, _cells):
+        return {"pnl": -109637.67, "capital": 1001.0, "days": 4}
+
+
 def stock_row(**overrides):
     values = {
         1: "买入",
@@ -110,11 +115,11 @@ class HistoricalCurveTests(unittest.TestCase):
         self.assertEqual(series["source"], "history")
         self.assertEqual(series["currency"], "人民币")
         values_by_iso = {point["iso"]: point["value"] for point in series["points"]}
-        self.assertAlmostEqual(values_by_iso["2026-05-01"], -1.0)
+        self.assertAlmostEqual(values_by_iso["2026-05-01"], 0.0)
         self.assertAlmostEqual(values_by_iso["2026-05-02"], 19.0)
         self.assertAlmostEqual(values_by_iso["2026-05-05"], 29.0)
 
-    def test_open_day_uses_market_close_as_curve_baseline(self):
+    def test_holding_float_uses_trade_cost_as_curve_baseline(self):
         row = stock_row()
         row[4] = Cell(date(2026, 5, 6))
         row[10] = Cell(120)
@@ -133,8 +138,8 @@ class HistoricalCurveTests(unittest.TestCase):
                 data = replace_curve_series_with_historical_prices(FakeCore(), rows, {"curve_series": []})
 
         values_by_iso = {point["iso"]: point["value"] for point in data["curve_series"][0]["points"]}
-        self.assertAlmostEqual(values_by_iso["2026-05-01"], -1.0)
-        self.assertAlmostEqual(values_by_iso["2026-05-02"], 9.0)
+        self.assertAlmostEqual(values_by_iso["2026-05-01"], 0.0)
+        self.assertAlmostEqual(values_by_iso["2026-05-02"], 209.0)
 
     def test_imported_closed_rows_use_raw_trade_lots_for_active_capital(self):
         aggregate_row = stock_row()
@@ -173,11 +178,12 @@ class HistoricalCurveTests(unittest.TestCase):
                 patch.object(historical_curve_module, "HISTORY_SOURCE_DIR", source_dir),
                 patch("trade_tracker.historical_curve.fetch_security_history_points_online", return_value=history),
             ):
-                data = replace_curve_series_with_historical_prices(FakeCore(), rows, {"curve_series": []})
+                data = replace_curve_series_with_historical_prices(ImportedAggregateCore(), rows, {"curve_series": []})
 
         points_by_iso = {point["iso"]: point for point in data["curve_series"][0]["points"]}
         self.assertLess(points_by_iso["2025-04-08"]["capital"], 300000)
         self.assertAlmostEqual(points_by_iso["2025-04-08"]["capital"], 235332.10)
+        self.assertAlmostEqual(points_by_iso["2025-04-08"]["value"], -103129.67)
 
 
 if __name__ == "__main__":

@@ -165,6 +165,10 @@ def normalize_curve_points(points: list[dict[str, object]]) -> list[dict[str, ob
             "serial": serial,
             "value": value,
         }
+        for key in ("float_value", "realized_value", "total_value"):
+            extra_value = parse_float(point.get(key))
+            if extra_value is not None:
+                by_day[iso][key] = extra_value
         capital = parse_float(point.get("capital"))
         if capital is not None:
             by_day[iso]["capital"] = capital
@@ -195,6 +199,10 @@ def converted_series(series_list: list[dict[str, object]]) -> list[dict[str, obj
                 "serial": point["serial"],
                 "value": value * rate,
             }
+            for key in ("float_value", "realized_value", "total_value"):
+                extra_value = parse_float(point.get(key))
+                if extra_value is not None:
+                    converted_point[key] = extra_value * rate
             capital = parse_float(point.get("capital"))
             if capital is not None:
                 converted_point["capital"] = capital * rate
@@ -231,10 +239,16 @@ def combine_series_to_cny(series_list: list[dict[str, object]]) -> dict[str, obj
                 indexes[index] += 1
         total_value = 0.0
         total_capital = 0.0
+        total_float = 0.0
+        total_realized = 0.0
+        total_total = 0.0
         for series, point in zip(series_items, last_points):
             if not point:
                 continue
             total_value += parse_float(point.get("value")) or 0.0
+            total_float += parse_float(point.get("float_value")) or parse_float(point.get("value")) or 0.0
+            total_realized += parse_float(point.get("realized_value")) or 0.0
+            total_total += parse_float(point.get("total_value")) or parse_float(point.get("value")) or 0.0
             point_capital = parse_float(point.get("capital"))
             total_capital += point_capital if point_capital is not None else parse_float(series.get("capital")) or 0.0
         base = by_iso[iso]
@@ -243,6 +257,9 @@ def combine_series_to_cny(series_list: list[dict[str, object]]) -> dict[str, obj
             "iso": base["iso"],
             "serial": base["serial"],
             "value": total_value,
+            "float_value": total_float,
+            "realized_value": total_realized,
+            "total_value": total_total,
         }
         if total_capital > 0.000001:
             combined_point["capital"] = total_capital
@@ -289,12 +306,12 @@ def render_curve_card(index: int, series: dict[str, object]) -> str:
                 <div class="curve-card" data-return-curve-card data-series-index="{index}">
                   <div class="curve-card-head">
                     <div>
-                      <h3 class="curve-title">{html.escape(currency)} 累计收益曲线</h3>
+                      <h3 class="curve-title">{html.escape(currency)} 历史总盈亏曲线</h3>
                       <p class="curve-subtitle" data-curve-subtitle>--</p>
                     </div>
                     <div class="curve-badge" data-curve-badge>--</div>
                   </div>
-                  <svg class="curve-svg" viewBox="0 0 620 260" role="img" aria-label="{html.escape(currency)}累计收益曲线">
+                  <svg class="curve-svg" viewBox="0 0 620 260" role="img" aria-label="{html.escape(currency)}历史总盈亏曲线">
                     <line class="curve-axis" x1="34" y1="18" x2="34" y2="216"></line>
                     <line class="curve-axis" x1="34" y1="216" x2="564" y2="216"></line>
                     <g data-curve-grid-lines></g>
@@ -319,6 +336,7 @@ def render_curve_card(index: int, series: dict[str, object]) -> str:
                     <text class="curve-axis-label" x="34" y="246" text-anchor="start" data-curve-start-label>--</text>
                     <text class="curve-axis-label" x="564" y="246" text-anchor="end" data-curve-end-label>--</text>
                     <text class="curve-end-value" x="574" y="18" data-curve-end-value>--</text>
+                    <rect class="curve-hover-capture" x="10" y="8" width="588" height="224" data-curve-hover-capture></rect>
                   </svg>
                   <div class="curve-tooltip" data-curve-tooltip hidden></div>
                   <div class="curve-risk-caption" data-curve-drawdown-caption hidden></div>
@@ -491,17 +509,17 @@ def render_curve_script(payload: list[dict[str, object]]) -> str:
                   }}
 
                   function rangePnlLabel(range) {{
-                    if (range === 'day') return '当日盈亏';
-                    if (range === 'month') return '本月盈亏';
-                    if (range === 'three-month') return '近三月盈亏';
-                    if (range === 'year') return '今年盈亏';
-                    if (range === 'three-year') return '近三年盈亏';
-                    if (range === 'custom') return '阶段盈亏';
-                    return '全部盈亏';
+                    if (range === 'day') return '当日总盈亏';
+                    if (range === 'month') return '本月末总盈亏';
+                    if (range === 'three-month') return '近三月末总盈亏';
+                    if (range === 'year') return '今年末总盈亏';
+                    if (range === 'three-year') return '近三年末总盈亏';
+                    if (range === 'custom') return '阶段末总盈亏';
+                    return '历史总盈亏';
                   }}
 
                   function rangeRateLabel(range) {{
-                    return range === 'all' ? '累计收益率' : '区间收益率';
+                    return '总盈亏率';
                   }}
 
                   function filteredPoints(points, range, latest, customStart, customEnd) {{
@@ -631,20 +649,31 @@ def render_curve_script(payload: list[dict[str, object]]) -> str:
                     return 1 + returnValue / 100;
                   }}
 
-                  function maxDrawdownFor(points) {{
+                  function drawdownRateBetween(peakPoint, troughPoint) {{
+                    const peakNav = drawdownNav(peakPoint);
+                    const troughNav = drawdownNav(troughPoint);
+                    if (!Number.isFinite(peakNav) || !Number.isFinite(troughNav) || peakNav <= 0 || troughNav <= 0) return NaN;
+                    return ((troughNav / peakNav) - 1) * 100;
+                  }}
+
+                  function maxDrawdownFor(points, metric) {{
+                    const mode = metric === 'amount' ? 'amount' : 'return';
                     let peak = null;
                     let result = null;
                     (points || []).forEach((point, index) => {{
                       const nav = drawdownNav(point);
                       const amount = Number(point?.amountValue || 0);
-                      if (!Number.isFinite(nav) || nav <= 0) return;
-                      if (!peak || nav > peak.nav) {{
-                        peak = {{ point, index, nav, amount }};
+                      const primary = mode === 'amount' ? amount : nav;
+                      if (!Number.isFinite(primary)) return;
+                      if (mode === 'return' && primary <= 0) return;
+                      if (!peak || primary > peak.primary) {{
+                        peak = {{ point, index, nav, amount, primary }};
                       }}
                       if (!peak || index <= peak.index) return;
                       const amountDrop = amount - peak.amount;
-                      const rateDrop = peak.nav > 0 ? ((nav / peak.nav) - 1) * 100 : NaN;
-                      if (Number.isFinite(rateDrop) && (!result || rateDrop < result.rate)) {{
+                      const rateDrop = drawdownRateBetween(peak.point, point);
+                      const primaryDrop = mode === 'amount' ? amountDrop : rateDrop;
+                      if (Number.isFinite(primaryDrop) && primaryDrop < 0 && (!result || primaryDrop < result.primaryDrop)) {{
                         result = {{
                           peak: peak.point,
                           trough: point,
@@ -652,14 +681,23 @@ def render_curve_script(payload: list[dict[str, object]]) -> str:
                           troughIndex: index,
                           amount: amountDrop,
                           rate: rateDrop,
+                          primaryDrop,
+                          mode,
                           peakNav: peak.nav,
                           troughNav: nav,
+                          peakAmount: peak.amount,
+                          troughAmount: amount,
+                          peakPrimary: peak.primary,
                         }};
                       }}
                     }});
                     if (result) {{
                       result.durationDays = daysBetween(result.peak, result.trough);
                       const recovery = (points || []).slice(result.troughIndex + 1).find((point) => {{
+                        if (result.mode === 'amount') {{
+                          const amount = Number(point?.amountValue);
+                          return Number.isFinite(amount) && amount >= result.peakAmount;
+                        }}
                         const nav = drawdownNav(point);
                         return Number.isFinite(nav) && nav >= result.peakNav;
                       }});
@@ -668,7 +706,7 @@ def render_curve_script(payload: list[dict[str, object]]) -> str:
                         result.recoveryDays = daysBetween(result.trough, recovery);
                       }}
                     }}
-                    return result && result.rate < 0 ? result : null;
+                    return result && result.primaryDrop < 0 ? result : null;
                   }}
 
                   function installHoverHandlers(card) {{
@@ -686,10 +724,14 @@ def render_curve_script(payload: list[dict[str, object]]) -> str:
                       if (!state || !state.points || !state.points.length) return hide();
                       const svgRect = svg.getBoundingClientRect();
                       const viewX = ((event.clientX - svgRect.left) / Math.max(svgRect.width, 1)) * dims.width;
-                      if (viewX < dims.left || viewX > dims.width - dims.right) return hide();
+                      const hitSlop = 28;
+                      const minX = dims.left;
+                      const maxX = dims.width - dims.right;
+                      if (viewX < minX - hitSlop || viewX > maxX + hitSlop) return hide();
+                      const clampedViewX = Math.max(minX, Math.min(maxX, viewX));
                       let selected = state.points[0];
                       state.points.forEach((point) => {{
-                        if (Math.abs(point.x - viewX) < Math.abs(selected.x - viewX)) selected = point;
+                        if (Math.abs(point.x - clampedViewX) < Math.abs(selected.x - clampedViewX)) selected = point;
                       }});
                       if (!selected) return hide();
                       const benchmark = selected.benchmark;
@@ -753,10 +795,12 @@ def render_curve_script(payload: list[dict[str, object]]) -> str:
                     const capital = Number(series.capital) > 0
                       ? Number(series.capital)
                       : Math.max(Math.abs(Number(points[points.length - 1]?.value || 0)), 1);
-                    let startValue = range === 'all' ? 0 : Number(points[0].value || 0);
                     function capitalForPoint(point) {{
-                      const pointCapital = Number(point?.capital || 0);
-                      return pointCapital > 0 ? pointCapital : capital;
+                      if (point && Object.prototype.hasOwnProperty.call(point, 'capital')) {{
+                        const pointCapital = Number(point.capital);
+                        if (Number.isFinite(pointCapital) && pointCapital >= 0) return pointCapital;
+                      }}
+                      return capital;
                     }}
                     let baseCapital = range === 'all' ? capital : capitalForPoint(points[0]);
                     if (!Number.isFinite(baseCapital) || baseCapital <= 0) baseCapital = capital;
@@ -781,42 +825,23 @@ def render_curve_script(payload: list[dict[str, object]]) -> str:
                         const delta = previousPoint ? Number(point.value || 0) - Number(previousPoint.value || 0) : 0;
                         const returnBase = returnBaseForPoint(point, previousPoint);
                         const dailyReturn = returnBase > 0 ? (delta / returnBase) * 100 : 0;
-                        const cumulativeAmount = Number(point.value || 0) - startValue;
-                        const cumulativeReturn = periodCapital > 0 ? (cumulativeAmount / periodCapital) * 100 : 0;
+                        const floatAmount = Number(point.value || 0);
+                        const pointCapital = capitalForPoint(point);
+                        const floatReturn = pointCapital > 0 ? (floatAmount / pointCapital) * 100 : 0;
                         return {{
                           ...point,
                           dailyAmountValue: delta,
                           dailyReturn,
-                          amountValue: cumulativeAmount,
-                          cumulativeAmountValue: cumulativeAmount,
+                          amountValue: floatAmount,
+                          cumulativeAmountValue: floatAmount,
                           baseCapital: returnBase > 0 ? returnBase : baseCapital,
                           referenceCapital: periodCapital,
-                          returnValue: cumulativeReturn,
-                          cumulativeReturnValue: cumulativeReturn,
+                          returnValue: floatReturn,
+                          cumulativeReturnValue: floatReturn,
                         }};
                       }});
                     }}
                     let accountValues = accountValuesFrom(points, referenceCapital);
-                    const liveDaily = range === 'day' ? liveDailyReference() : null;
-                    if (liveDaily && Number.isFinite(liveDaily.pnl)) {{
-                      const endPoint = points[points.length - 1] || {{}};
-                      const startPoint = points.length > 1 ? points[0] : previousPointFrom(endPoint);
-                      const dayCapital = capitalForPoint(endPoint);
-                      const dayReturn = Number.isFinite(liveDaily.returnValue)
-                        ? liveDaily.returnValue
-                        : (dayCapital ? (liveDaily.pnl / dayCapital) * 100 : NaN);
-                      points = [
-                        {{ ...startPoint, value: 0, capital: dayCapital }},
-                        {{ ...endPoint, value: liveDaily.pnl, capital: dayCapital }},
-                      ];
-                      startValue = 0;
-                      baseCapital = dayCapital;
-                      referenceCapital = dayCapital;
-                      accountValues = [
-                        {{ ...points[0], dailyAmountValue: 0, amountValue: 0, cumulativeAmountValue: 0, baseCapital, referenceCapital, dailyReturn: 0, returnValue: 0, cumulativeReturnValue: 0 }},
-                        {{ ...points[1], dailyAmountValue: liveDaily.pnl, amountValue: liveDaily.pnl, cumulativeAmountValue: liveDaily.pnl, baseCapital, referenceCapital, dailyReturn: Number.isFinite(dayReturn) ? dayReturn : 0, returnValue: Number.isFinite(dayReturn) ? dayReturn : 0, cumulativeReturnValue: Number.isFinite(dayReturn) ? dayReturn : 0 }},
-                      ];
-                    }}
                     const firstBenchmarkClose = benchmarkBaseClose(rawBenchmarkPoints, range, latest, customStart, customEnd, benchmarkPoints);
                     let benchmarkGrowth = 1;
                     const benchmarkValues = firstBenchmarkClose > 0
@@ -875,7 +900,7 @@ def render_curve_script(payload: list[dict[str, object]]) -> str:
                     const periodExcessAmount = Number.isFinite(periodPnl) && Number.isFinite(periodBenchmarkAmount)
                       ? Number(periodPnl) - Number(periodBenchmarkAmount)
                       : NaN;
-                    const drawdown = maxDrawdownFor(accountValues);
+                    const drawdown = maxDrawdownFor(accountValues, metric);
                     const areaPath = `${{linePath}} L ${{lastPos[0].toFixed(2)}} ${{zeroY.toFixed(2)}} L ${{firstPos[0].toFixed(2)}} ${{zeroY.toFixed(2)}} Z`;
 
                     const gridLines = card.querySelector('[data-curve-grid-lines]');
@@ -951,9 +976,13 @@ def render_curve_script(payload: list[dict[str, object]]) -> str:
                         const recoveryText = drawdown.recovery
                           ? `已修复 ${{daysText(drawdown.recoveryDays)}}`
                           : '尚未修复';
+                        const primaryLabel = metric === 'amount' ? '利润最大回撤' : '收益率最大回撤';
+                        const primaryText = metric === 'amount' ? signedMoneyText(drawdown.amount) : percentText(drawdown.rate);
+                        const secondaryLabel = metric === 'amount' ? '对应收益率回撤' : '对应利润回撤';
+                        const secondaryText = metric === 'amount' ? percentText(drawdown.rate) : signedMoneyText(drawdown.amount);
                         drawdownCaption.innerHTML = `
-                          <span><em>最大回撤</em><strong>${{percentText(drawdown.rate)}}</strong></span>
-                          <span><em>回撤金额</em><strong>${{signedMoneyText(drawdown.amount)}}</strong></span>
+                          <span><em>${{primaryLabel}}</em><strong>${{primaryText}}</strong></span>
+                          <span><em>${{secondaryLabel}}</em><strong>${{secondaryText}}</strong></span>
                           <span><em>回撤区间</em><strong>${{drawdown.peak.date}} 至 ${{drawdown.trough.date}} · ${{daysText(drawdown.durationDays)}}</strong></span>
                           <span><em>修复情况</em><strong>${{recoveryText}}</strong></span>
                         `;

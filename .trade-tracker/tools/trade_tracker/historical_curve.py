@@ -4,6 +4,7 @@ import json
 import time
 from concurrent.futures import ThreadPoolExecutor, as_completed
 from dataclasses import dataclass
+from dataclasses import replace
 from datetime import date, datetime, timedelta, timezone
 from urllib.error import URLError
 from urllib.parse import urlencode
@@ -12,7 +13,7 @@ from urllib.request import Request, urlopen
 from .market_data import display_currency_label, infer_secid, tencent_symbol
 from .runtime import APP_DIR, emit_progress
 from .settings import OPTION_EVENTS
-from .utils import cell_raw, clean_text, core_trade_type, excel_serial_to_date, parse_float, raw_number, raw_text_value
+from .utils import cell_raw, clean_text, core_trade_type, excel_serial_to_date, parse_display_number, parse_float, raw_number, raw_text_value
 
 
 STOCK_EVENTS = {"现股", "Stock", "stock", "STOCK"}
@@ -40,6 +41,7 @@ class StockCurveLot:
     open_price: float
     close_price: float | None
     fee: float
+    entry_fee: float | None
     capital: float
     realized_pnl: float | None
     source: str = ""
@@ -58,6 +60,7 @@ class RealizedCurveEvent:
     event_date: date
     currency: str
     pnl: float
+    ticker: str = ""
 
 
 def date_label(day: date) -> str:
@@ -399,6 +402,7 @@ def stock_lot_from_row(core, cells: dict[int, object]) -> StockCurveLot | None:
         open_price=float(open_price),
         close_price=float(close_price) if close_price is not None else None,
         fee=fee,
+        entry_fee=fee,
         capital=abs(float(capital)),
         realized_pnl=realized_pnl,
         source=imported_trade_source_from_note(raw_text_value(core, cells, 18)),
@@ -508,6 +512,7 @@ def load_raw_source_closed_lots(core, sources: set[str]) -> list[StockCurveLot]:
                             open_price=open_price,
                             close_price=price,
                             fee=buy_fee + sell_fee,
+                            entry_fee=buy_fee,
                             capital=buy_capital,
                             realized_pnl=realized_pnl,
                             source=source,
@@ -523,6 +528,51 @@ def load_raw_source_closed_lots(core, sources: set[str]) -> list[StockCurveLot]:
         finally:
             workbook.close()
     return all_lots
+
+
+def lot_group_key(lot: StockCurveLot) -> tuple[str, str, str]:
+    return (clean_text(lot.source), clean_text(lot.ticker), clean_text(lot.currency))
+
+
+def reconcile_detailed_lot_pnl_to_aggregate(
+    detailed_lots: list[StockCurveLot],
+    aggregate_lots: list[StockCurveLot],
+) -> list[StockCurveLot]:
+    """Keep imported fills for dates/capital, but match the workbook P&L totals."""
+    if not detailed_lots or not aggregate_lots:
+        return detailed_lots
+
+    target_by_group: dict[tuple[str, str, str], float] = {}
+    for lot in aggregate_lots:
+        if lot.realized_pnl is None:
+            continue
+        key = lot_group_key(lot)
+        target_by_group[key] = target_by_group.get(key, 0.0) + float(lot.realized_pnl)
+
+    by_group: dict[tuple[str, str, str], list[StockCurveLot]] = {}
+    for lot in detailed_lots:
+        by_group.setdefault(lot_group_key(lot), []).append(lot)
+
+    reconciled: list[StockCurveLot] = []
+    for key, lots in by_group.items():
+        target = target_by_group.get(key)
+        if target is None:
+            reconciled.extend(lots)
+            continue
+        current = sum(float(lot.realized_pnl or 0.0) for lot in lots)
+        if abs(current) > EPSILON:
+            factor = target / current
+            reconciled.extend(replace(lot, realized_pnl=float(lot.realized_pnl or 0.0) * factor) for lot in lots)
+            continue
+        if not lots:
+            continue
+        latest_index = max(range(len(lots)), key=lambda index: lots[index].close_date or lots[index].open_date)
+        for index, lot in enumerate(lots):
+            realized = float(lot.realized_pnl or 0.0)
+            if index == latest_index:
+                realized += target
+            reconciled.append(replace(lot, realized_pnl=realized))
+    return reconciled
 
 
 def non_stock_realized_event_from_row(core, cells: dict[int, object]) -> RealizedCurveEvent | None:
@@ -544,7 +594,11 @@ def non_stock_realized_event_from_row(core, cells: dict[int, object]) -> Realize
     currency, _currency_raw = normalize_currency_label(core, cell_raw(cells, 20))
     if not currency:
         return None
-    return RealizedCurveEvent(close_date or date.today(), currency, float(pnl))
+    try:
+        ticker = clean_text(core.normalize_ticker(cell_raw(cells, 5), cell_raw(cells, 20)))
+    except Exception:
+        ticker = clean_text(cell_raw(cells, 5)).upper()
+    return RealizedCurveEvent(close_date or date.today(), currency, float(pnl), ticker)
 
 
 def build_stock_lots(core, rows: list[tuple[int, dict[int, object]]]) -> list[StockCurveLot]:
@@ -557,7 +611,12 @@ def build_stock_lots(core, rows: list[tuple[int, dict[int, object]]]) -> list[St
     detailed_lots = load_raw_source_closed_lots(core, aggregate_sources)
     detailed_sources = {lot.source for lot in detailed_lots}
     if detailed_sources:
-        lots = [lot for lot in lots if not (lot.source in detailed_sources and lot.close_date is not None)]
+        aggregate_closed_lots = [lot for lot in lots if lot.source in detailed_sources and lot.close_date is not None]
+        aggregate_groups = {lot_group_key(lot) for lot in aggregate_closed_lots}
+        detailed_lots = [lot for lot in detailed_lots if lot_group_key(lot) in aggregate_groups]
+        detailed_lots = reconcile_detailed_lot_pnl_to_aggregate(detailed_lots, aggregate_closed_lots)
+        detailed_groups = {lot_group_key(lot) for lot in detailed_lots}
+        lots = [lot for lot in lots if not (lot.close_date is not None and lot_group_key(lot) in detailed_groups)]
         lots.extend(detailed_lots)
     return lots
 
@@ -568,6 +627,139 @@ def build_non_stock_realized_events(core, rows: list[tuple[int, dict[int, object
         event = non_stock_realized_event_from_row(core, cells)
         if event:
             events.append(event)
+    return events
+
+
+def build_dividend_realized_events(core) -> list[RealizedCurveEvent]:
+    try:
+        raw_events = core.load_dividend_events() or []
+    except Exception:
+        raw_events = []
+    events: list[RealizedCurveEvent] = []
+    for item in raw_events:
+        if not isinstance(item, dict):
+            continue
+        event_date = excel_serial_to_date(item.get("serial")) or excel_serial_to_date(item.get("date"))
+        amount = parse_float(item.get("amount"))
+        if event_date is None or amount is None:
+            continue
+        currency, _currency_raw = normalize_currency_label(core, item.get("currency"))
+        if not currency:
+            continue
+        try:
+            ticker = clean_text(core.normalize_ticker(item.get("ticker"), item.get("currency")))
+        except Exception:
+            ticker = clean_text(item.get("ticker")).upper()
+        events.append(RealizedCurveEvent(event_date, currency, float(amount), ticker))
+    return events
+
+
+def summary_realized_targets(data: dict[str, object] | None) -> dict[tuple[str, str], float]:
+    if not isinstance(data, dict):
+        return {}
+    targets: dict[tuple[str, str], float] = {}
+    for item in data.get("stock_summary", []) or []:
+        if not isinstance(item, dict):
+            continue
+        ticker = clean_text(item.get("ticker"))
+        currency = clean_text(item.get("currency"))
+        realized = parse_display_number(item.get("realized_pnl"))
+        if ticker and currency and realized is not None:
+            targets[(ticker, currency)] = targets.get((ticker, currency), 0.0) + float(realized)
+    return targets
+
+
+def adjust_stock_lot_realized_to_summary(
+    lots: list[StockCurveLot],
+    data: dict[str, object] | None,
+    non_stock_events: list[RealizedCurveEvent],
+) -> list[StockCurveLot]:
+    targets = summary_realized_targets(data)
+    if not targets:
+        return lots
+    for event in non_stock_events:
+        if event.ticker:
+            key = (event.ticker, event.currency)
+            if key in targets:
+                targets[key] -= event.pnl
+
+    by_key: dict[tuple[str, str], list[StockCurveLot]] = {}
+    for lot in lots:
+        if lot.close_date is not None:
+            by_key.setdefault((lot.ticker, lot.currency), []).append(lot)
+
+    replacement_by_id: dict[int, StockCurveLot] = {}
+    for key, target in targets.items():
+        group = by_key.get(key) or []
+        if not group:
+            continue
+        current = sum(float(lot.realized_pnl or 0.0) for lot in group)
+        if abs(current - target) <= 0.01:
+            continue
+        if abs(current) > EPSILON:
+            factor = target / current
+            replacement_by_id.update(
+                {id(lot): replace(lot, realized_pnl=float(lot.realized_pnl or 0.0) * factor) for lot in group}
+            )
+        else:
+            latest = max(group, key=lambda lot: lot.close_date or lot.open_date)
+            replacement_by_id[id(latest)] = replace(latest, realized_pnl=target)
+
+    if not replacement_by_id:
+        return lots
+    return [replacement_by_id.get(id(lot), lot) for lot in lots]
+
+
+def residual_realized_events_from_summary(
+    core,
+    rows: list[tuple[int, dict[int, object]]],
+    data: dict[str, object] | None,
+    lots: list[StockCurveLot],
+    non_stock_events: list[RealizedCurveEvent],
+) -> list[RealizedCurveEvent]:
+    residuals = summary_realized_targets(data)
+    if not residuals:
+        return []
+    for lot in lots:
+        if lot.close_date is not None:
+            key = (lot.ticker, lot.currency)
+            if key in residuals:
+                residuals[key] -= float(lot.realized_pnl or 0.0)
+    for event in non_stock_events:
+        if event.ticker:
+            key = (event.ticker, event.currency)
+            if key in residuals:
+                residuals[key] -= event.pnl
+
+    latest_date_by_key: dict[tuple[str, str], date] = {}
+    for lot in lots:
+        key = (lot.ticker, lot.currency)
+        event_date = lot.close_date or lot.open_date
+        current = latest_date_by_key.get(key)
+        latest_date_by_key[key] = max(current, event_date) if current else event_date
+
+    for _row_number, cells in rows:
+        try:
+            currency, currency_raw = normalize_currency_label(core, cell_raw(cells, 20))
+            ticker = clean_text(core.normalize_ticker(cell_raw(cells, 5), currency_raw))
+        except Exception:
+            currency = clean_text(cell_raw(cells, 20))
+            ticker = clean_text(cell_raw(cells, 5)).upper()
+        if not ticker or not currency:
+            continue
+        event_date = excel_serial_to_date(cell_raw(cells, 4)) or excel_serial_to_date(cell_raw(cells, 2))
+        if event_date is None:
+            continue
+        key = (ticker, currency)
+        current = latest_date_by_key.get(key)
+        latest_date_by_key[key] = max(current, event_date) if current else event_date
+
+    events: list[RealizedCurveEvent] = []
+    for (ticker, currency), amount in residuals.items():
+        if abs(amount) <= 0.01:
+            continue
+        event_date = latest_date_by_key.get((ticker, currency)) or date.today()
+        events.append(RealizedCurveEvent(event_date, currency, amount, ticker))
     return events
 
 
@@ -690,15 +882,17 @@ def close_for_day(history: dict[date, float], day: date) -> float | None:
     return history[max(candidates)]
 
 
-def lot_price_pnl(lot: StockCurveLot, entry_price: float, price: float) -> float:
+def lot_price_pnl(lot: StockCurveLot, entry_price: float, price: float, fee: float | None = None) -> float:
     gross_qty = abs(lot.quantity)
+    charge = lot.fee if fee is None else fee
     if lot.is_short:
-        return (entry_price - price) * gross_qty - lot.fee
-    return (price - entry_price) * gross_qty - lot.fee
+        return (entry_price - price) * gross_qty - charge
+    return (price - entry_price) * gross_qty - charge
 
 
 def unrealized_pnl(lot: StockCurveLot, price: float, entry_price: float | None = None) -> float:
-    return lot_price_pnl(lot, entry_price if entry_price is not None else lot.open_price, price)
+    fee = lot.entry_fee if lot.entry_fee is not None else lot.fee
+    return lot_price_pnl(lot, entry_price if entry_price is not None else lot.open_price, price, fee)
 
 
 def mark_price_for_day(lot: StockCurveLot, day: date, history: dict[date, float]) -> float | None:
@@ -710,13 +904,42 @@ def entry_price_for_curve(lot: StockCurveLot, history: dict[date, float]) -> flo
 
 
 def realized_pnl_for_curve(lot: StockCurveLot, history: dict[date, float]) -> float:
-    entry_price = entry_price_for_curve(lot, history)
+    if lot.realized_pnl is not None:
+        return float(lot.realized_pnl)
     close_price = lot.close_price
     if close_price is None and lot.close_date is not None:
         close_price = close_for_day(history, lot.close_date)
     if close_price is None:
-        return float(lot.realized_pnl or 0.0)
-    return lot_price_pnl(lot, entry_price, close_price)
+        return 0.0
+    return lot_price_pnl(lot, lot.open_price, close_price)
+
+
+def current_holding_price_lookup(data: dict[str, object] | None) -> dict[tuple[str, str], float]:
+    if not isinstance(data, dict):
+        return {}
+    prices: dict[tuple[str, str], float] = {}
+    for item in data.get("holdings", []) or []:
+        if not isinstance(item, dict):
+            continue
+        ticker = clean_text(item.get("ticker"))
+        currency = clean_text(item.get("currency"))
+        price = parse_display_number(item.get("last_price"))
+        if ticker and currency and price is not None and price > 0:
+            prices[(ticker, currency)] = float(price)
+    return prices
+
+
+def mark_price_for_curve_day(
+    lot: StockCurveLot,
+    day: date,
+    history: dict[date, float],
+    current_prices: dict[tuple[str, str], float],
+) -> float | None:
+    if day >= date.today():
+        price = current_prices.get((lot.ticker, lot.currency))
+        if price is not None:
+            return price
+    return mark_price_for_day(lot, day, history)
 
 
 def point_dates_for_currency(lots: list[StockCurveLot], histories: dict[tuple[str, str], dict[date, float]], events: list[RealizedCurveEvent]) -> dict[str, set[date]]:
@@ -737,12 +960,16 @@ def point_dates_for_currency(lots: list[StockCurveLot], histories: dict[tuple[st
     return by_currency
 
 
-def build_historical_curve_series(core, rows: list[tuple[int, dict[int, object]]]) -> list[dict[str, object]]:
+def build_historical_curve_series(core, rows: list[tuple[int, dict[int, object]]], data: dict[str, object] | None = None) -> list[dict[str, object]]:
     lots = build_stock_lots(core, rows)
-    events = build_non_stock_realized_events(core, rows)
-    if not lots and not events:
+    if not lots:
         return []
+    non_stock_events = build_non_stock_realized_events(core, rows)
+    lots = adjust_stock_lot_realized_to_summary(lots, data, non_stock_events)
+    residual_events = residual_realized_events_from_summary(core, rows, data, lots, non_stock_events)
     histories = fetch_histories_for_lots(core, lots)
+    events = [*non_stock_events, *residual_events, *build_dividend_realized_events(core)]
+    current_prices = current_holding_price_lookup(data)
     dates_by_currency = point_dates_for_currency(lots, histories, events)
     series_list: list[dict[str, object]] = []
     for currency, days in sorted(dates_by_currency.items()):
@@ -751,7 +978,6 @@ def build_historical_curve_series(core, rows: list[tuple[int, dict[int, object]]
         currency_lots = [lot for lot in lots if lot.currency == currency]
         currency_events = [event for event in events if event.currency == currency]
         points: list[dict[str, object]] = []
-        last_capital = 0.0
         for day in sorted(days):
             realized_total = sum(
                 realized_pnl_for_curve(lot, histories.get((lot.ticker, lot.currency), {}))
@@ -761,34 +987,45 @@ def build_historical_curve_series(core, rows: list[tuple[int, dict[int, object]]
             realized_total += sum(event.pnl for event in currency_events if event.event_date <= day)
             unrealized_total = 0.0
             active_capital = 0.0
-            has_active_price = False
+            has_active_position = False
+            has_priced_position = False
+            closed_on_day = any(lot.close_date == day for lot in currency_lots)
+            event_on_day = any(event.event_date == day for event in currency_events)
             for lot in currency_lots:
                 if not (lot.open_date <= day and (lot.close_date is None or day < lot.close_date)):
                     continue
+                has_active_position = True
+                active_capital += lot.capital
+                if day <= lot.open_date:
+                    continue
                 history = histories.get((lot.ticker, lot.currency), {})
-                price = mark_price_for_day(lot, day, history)
+                price = mark_price_for_curve_day(lot, day, history, current_prices)
                 if price is None:
                     continue
-                has_active_price = True
-                unrealized_total += unrealized_pnl(lot, price, entry_price_for_curve(lot, history))
-                active_capital += lot.capital
-            if active_capital > EPSILON:
-                last_capital = active_capital
-            if not has_active_price and abs(realized_total) <= EPSILON:
+                has_priced_position = True
+                unrealized_total += unrealized_pnl(lot, price)
+            if not has_active_position and not has_priced_position and not closed_on_day and not event_on_day:
                 continue
             point = {
                 "date": date_label(day),
                 "iso": day.isoformat(),
                 "serial": excel_serial(day),
                 "value": realized_total + unrealized_total,
+                "float_value": unrealized_total,
+                "realized_value": realized_total,
+                "total_value": realized_total + unrealized_total,
             }
             if active_capital > EPSILON:
                 point["capital"] = active_capital
-            elif last_capital > EPSILON:
-                point["capital"] = last_capital
+            elif closed_on_day:
+                point["capital"] = 0.0
             points.append(point)
         if len(points) >= 2:
-            capital = parse_float(points[-1].get("capital")) or sum(lot.capital for lot in currency_lots)
+            capital = parse_float(points[-1].get("capital"))
+            if capital is None or capital <= EPSILON:
+                capital = max((parse_float(point.get("capital")) or 0.0 for point in points), default=0.0)
+            if capital <= EPSILON:
+                capital = sum(lot.capital for lot in currency_lots)
             series_list.append(
                 {
                     "currency": currency,
@@ -803,7 +1040,7 @@ def build_historical_curve_series(core, rows: list[tuple[int, dict[int, object]]
 
 def replace_curve_series_with_historical_prices(core, rows: list[tuple[int, dict[int, object]]], data: dict[str, object]) -> dict[str, object]:
     started_at = time.monotonic()
-    series = build_historical_curve_series(core, rows)
+    series = build_historical_curve_series(core, rows, data)
     if series:
         data["curve_series"] = series
         total_points = sum(len(item.get("points", []) or []) for item in series if isinstance(item, dict))
