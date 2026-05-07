@@ -128,11 +128,11 @@ class ClearanceSummary:
 
     @property
     def best_cycle(self) -> ClearanceCycle | None:
-        return max(self.cycles, key=lambda cycle: cycle.pnl, default=None)
+        return max((cycle for cycle in self.cycles if cycle.pnl > EPSILON), key=lambda cycle: cycle.pnl, default=None)
 
     @property
     def worst_cycle(self) -> ClearanceCycle | None:
-        return min(self.cycles, key=lambda cycle: cycle.pnl, default=None)
+        return min((cycle for cycle in self.cycles if cycle.pnl < -EPSILON), key=lambda cycle: cycle.pnl, default=None)
 
 
 def normalize_currency_label(core, currency: object) -> str:
@@ -567,8 +567,8 @@ def render_clearance_filter_script() -> str:
               stats.pnl += pnl;
               stats.capital += capital;
               stats.days += days;
-              if (!stats.best || pnl > stats.best.pnl) stats.best = item;
-              if (!stats.worst || pnl < stats.worst.pnl) stats.worst = item;
+              if (pnl > 0.000001 && (!stats.best || pnl > stats.best.pnl)) stats.best = item;
+              if (pnl < -0.000001 && (!stats.worst || pnl < stats.worst.pnl)) stats.worst = item;
             });
 
             Array.from(statsByCurrency.values())

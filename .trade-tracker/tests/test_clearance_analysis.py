@@ -164,6 +164,59 @@ class ClearanceAnalysisTests(unittest.TestCase):
         self.assertAlmostEqual(monthly[0].win_rate, 0.5)
         self.assertEqual(monthly[0].pnl, 80)
         self.assertEqual(yearly[0].period, "2026年")
+        self.assertEqual(monthly[0].best_cycle.ticker, "TICKER_A")
+        self.assertEqual(monthly[0].worst_cycle.ticker, "TICKER_B")
+
+    def test_clearance_best_and_worst_only_show_matching_profit_direction(self):
+        positive = summarize_clearance_cycles(
+            build_clearance_cycles(
+                FakeCore(),
+                [
+                    (
+                        2,
+                        row(
+                            kind="股票",
+                            open_date=date(2026, 1, 1),
+                            close_date=date(2026, 1, 2),
+                            ticker="ticker_a",
+                            event="现股",
+                            qty=100,
+                            capital=1000,
+                            pnl=100,
+                            currency="人民币",
+                        ),
+                    )
+                ],
+            ),
+            "month",
+        )[0]
+        negative = summarize_clearance_cycles(
+            build_clearance_cycles(
+                FakeCore(),
+                [
+                    (
+                        3,
+                        row(
+                            kind="股票",
+                            open_date=date(2026, 2, 1),
+                            close_date=date(2026, 2, 2),
+                            ticker="ticker_b",
+                            event="现股",
+                            qty=100,
+                            capital=1000,
+                            pnl=-50,
+                            currency="人民币",
+                        ),
+                    )
+                ],
+            ),
+            "month",
+        )[0]
+
+        self.assertIsNone(positive.worst_cycle)
+        self.assertEqual(positive.best_cycle.ticker, "TICKER_A")
+        self.assertIsNone(negative.best_cycle)
+        self.assertEqual(negative.worst_cycle.ticker, "TICKER_B")
 
     def test_render_clearance_section_uses_selectable_period_detail_view(self):
         rows = [
