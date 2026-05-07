@@ -17,9 +17,11 @@ from trade_tracker.analytics import build_holding_days_map
 from trade_tracker.market_data import (
     eastmoney_quote_from_row,
     fetch_option_quote,
+    fetch_hkex_option_target_search_quote,
     fetch_us_option_quote,
     fetch_tencent_fx_rates_to_cny,
     fetch_yahoo_fx_rates_to_cny,
+    parse_hkex_option_search_rows,
     parse_yahoo_us_option_chain,
     parse_hkex_option_detail,
     tencent_quote_from_payload,
@@ -461,6 +463,62 @@ class RealizedCostAdjustmentTests(unittest.TestCase):
         price, as_of = parse_hkex_option_detail(html)
         self.assertAlmostEqual(price, 0.37)
         self.assertEqual(as_of, "14:31:00")
+
+    def test_parse_hkex_option_search_rows_reads_chain_last_price(self):
+        html = """
+        <!--SORC_HACK_HANWEB_START--><br><!--SORC_HACK_HANWEB_END-->
+        <tr class='alttableeven'>
+          <td></td>
+          <td><a href='stock_options_detail.aspx?oID=1349016&ucode=01810#charts'></a></td>
+          <td><a href='stock_options_detail.aspx?oID=1349016&ucode=01810'></a></td>
+          <td class='acenter'>01810</td><td class='aleft uname'>XiaoMi Corporation</td><td>MIU</td>
+          <td><span class='blue'>Call</span></td><td>28/05/26</td><td>32.00</td><td>0.890</td>
+          <td><span class='changedown'>0.130</span></td><td>2.50% OTM</td><td>40.52</td>
+          <td>48.66</td><td>42.37</td><td>14.86</td><td>2.85</td><td>1439</td><td>5632</td>
+        </tr>
+        """
+
+        quotes = parse_hkex_option_search_rows(html, "07/05/2026 15:38")
+
+        self.assertEqual(quotes[("CALL", "32")]["option_code"], "HKEX:1349016")
+        self.assertEqual(quotes[("CALL", "32")]["last_price"], 0.89)
+        self.assertEqual(quotes[("CALL", "32")]["as_of"], "07/05/2026 15:38")
+
+    def test_hkex_option_quote_uses_search_chain_before_detail_page(self):
+        with (
+            patch(
+                "trade_tracker.market_data.fetch_hkex_option_search_quote",
+                return_value={"option_code": "HKEX:1349016", "last_price": 0.89, "source": "HKEX delayed search"},
+            ) as search_quote,
+            patch("trade_tracker.market_data.fetch_hkex_option_id") as detail_lookup,
+        ):
+            quote = fetch_option_quote(FakeCore(), "01810", "港币", "认购", "2026-05-28", 32)
+
+        self.assertEqual(quote["last_price"], 0.89)
+        search_quote.assert_called_once()
+        detail_lookup.assert_not_called()
+
+    def test_hkex_target_search_uses_underlying_moneyness_window(self):
+        html = """
+        <tr class='alttableeven'>
+          <td></td><td><a href='stock_options_detail.aspx?oID=1349016&ucode=01810#charts'></a></td>
+          <td><a href='stock_options_detail.aspx?oID=1349016&ucode=01810'></a></td><td>01810</td>
+          <td>XiaoMi Corporation</td><td>MIU</td><td>Call</td><td>28/05/26</td>
+          <td>32.00</td><td>0.890</td><td>-</td><td>2.50% OTM</td><td>40.52</td>
+          <td>48.66</td><td>42.37</td><td>14.86</td><td>2.85</td><td>1439</td><td>5632</td>
+        </tr>
+        """
+        with (
+            patch("trade_tracker.market_data.fetch_hkex_underlying_price", return_value=31.2),
+            patch("trade_tracker.market_data.request_hkex_option_search", return_value=html) as search,
+        ):
+            quote = fetch_hkex_option_target_search_quote(FakeCore(), "01810", "认购", "2026-05-28", 32)
+
+        self.assertEqual(quote["last_price"], 0.89)
+        payload = search.call_args.args[0]
+        self.assertEqual(payload["type"], "search")
+        self.assertLessEqual(float(payload["moneyness1"]), -2.5)
+        self.assertGreaterEqual(float(payload["moneyness2"]), -2.5)
 
     def test_parse_yahoo_us_option_chain_prefers_bid_ask_midpoint(self):
         payload = {

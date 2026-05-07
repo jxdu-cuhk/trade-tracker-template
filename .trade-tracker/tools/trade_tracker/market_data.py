@@ -22,6 +22,8 @@ MARKET_HTTP_TIMEOUT = 3
 EASTMONEY_HTTP_TIMEOUT = 2
 HKEX_HTTP_TIMEOUT = 3
 HKEX_REQUEST_RETRIES = 2
+HKEX_SEARCH_PAGE_SIZE = 10
+HKEX_SEARCH_CACHE_TTL_SECONDS = 12
 US_OPTION_HTTP_TIMEOUT = 3
 US_OPTION_CACHE_TTL_SECONDS = 15 * 60
 MARKET_BATCH_SIZE = 80
@@ -29,6 +31,10 @@ YAHOO_BATCH_SIZE = 50
 EASTMONEY_BATCH_FIELDS = "f12,f13,f14,f2,f1,f18"
 EASTMONEY_SINGLE_FIELDS = "f57,f58,f43,f59,f60"
 _HKEX_OPTION_ID_CACHE: dict[tuple[str, str, str, str], str | None] = {}
+_HKEX_OPTION_SEARCH_CHAIN_CACHE: dict[tuple[str, str, str], dict[str, object]] = {}
+_HKEX_OPTION_SEARCH_CHAIN_FUTURES: dict[tuple[str, str, str], Future] = {}
+_HKEX_OPTION_SEARCH_CHAIN_LOCK = Lock()
+_HKEX_UNDERLYING_PRICE_CACHE: dict[str, tuple[float, float]] = {}
 _US_OPTION_CHAIN_CACHE: dict[tuple[str, str], dict[tuple[str, str], dict]] = {}
 _US_OPTION_CHAIN_FUTURES: dict[tuple[str, str], Future] = {}
 _US_OPTION_CHAIN_LOCK = Lock()
@@ -653,6 +659,246 @@ def hkex_option_type_for_event(event: str) -> str:
     return ""
 
 
+def hkex_option_kind_from_type(option_type: str) -> str:
+    text = clean_text(option_type).upper()
+    if text in {"C", "CALL"}:
+        return "CALL"
+    if text in {"P", "PUT"}:
+        return "PUT"
+    return ""
+
+
+def hkex_option_search_key(core, ticker, event, expiry) -> tuple[str, str, str] | None:
+    underlying = clean_text(core.normalize_ticker(ticker, "HKD")).zfill(5)
+    option_type = hkex_option_type_for_event(str(event or ""))
+    expiry_iso = normalize_option_expiry(str(expiry or ""))
+    if not underlying or not option_type or not expiry_iso:
+        return None
+    return underlying, option_type, expiry_iso
+
+
+def request_hkex_option_search(data: dict[str, str], retries: int = 1) -> str:
+    base_url = "https://www.hkex.com.hk/eng/sorc/options/stock_options_search.aspx"
+    request = Request(
+        base_url,
+        data=urlencode(data).encode("utf-8"),
+        headers={
+            "User-Agent": "Mozilla/5.0",
+            "Content-Type": "application/x-www-form-urlencoded",
+            "Referer": base_url,
+        },
+    )
+    last_error = None
+    for attempt in range(max(1, retries)):
+        try:
+            with urlopen(request, timeout=HKEX_HTTP_TIMEOUT) as response:
+                return response.read().decode("utf-8", "ignore")
+        except (TimeoutError, URLError, OSError) as error:
+            last_error = error
+            if attempt < retries - 1:
+                time.sleep(0.12 * (attempt + 1))
+    if last_error:
+        raise last_error
+    return ""
+
+
+def hkex_option_search_params(key: tuple[str, str, str], action_type: str, page: int = 1) -> dict[str, str]:
+    underlying, option_type, expiry_iso = key
+    return {
+        "action": "ajax",
+        "type": action_type,
+        "otype": "ucode",
+        "code": underlying,
+        "wtype": option_type,
+        "mdate": expiry_iso,
+        "moneyness1": "-100",
+        "moneyness2": "100",
+        "premium1": "0",
+        "premium2": "100",
+        "ordering": "strike_asc",
+        "page": str(page),
+    }
+
+
+def hkex_option_target_search_params(
+    key: tuple[str, str, str],
+    moneyness_low: float,
+    moneyness_high: float,
+) -> dict[str, str]:
+    params = hkex_option_search_params(key, "search", 1)
+    params["moneyness1"] = f"{moneyness_low:.2f}".rstrip("0").rstrip(".")
+    params["moneyness2"] = f"{moneyness_high:.2f}".rstrip("0").rstrip(".")
+    return params
+
+
+def parse_hkex_option_search_total(html: str) -> tuple[int, str]:
+    html = strip_hkex_hanweb_header(html)
+    total_match = re.search(r"id=['\"]ResultTableTotal['\"]>\s*(\d+)\s*<", html)
+    update_match = re.search(r"id=['\"]LastUpdate['\"]>\s*([^<]*)<", html)
+    total = int(total_match.group(1)) if total_match else 0
+    as_of = clean_text(update_match.group(1)) if update_match else ""
+    return total, as_of
+
+
+def table_cells_from_row(row_html: str) -> list[str]:
+    cells: list[str] = []
+    for cell in re.findall(r"<td\b[^>]*>(.*?)</td>", row_html, re.S | re.I):
+        cells.append(clean_text(re.sub(r"<[^>]+>", " ", cell)))
+    return cells
+
+
+def parse_hkex_option_search_rows(html: str, as_of: str = "") -> dict[tuple[str, str], dict]:
+    html = strip_hkex_hanweb_header(html)
+    quotes: dict[tuple[str, str], dict] = {}
+    for row_html in re.findall(r"<tr\b[^>]*>(.*?)</tr>", html, re.S | re.I):
+        cells = table_cells_from_row(row_html)
+        if len(cells) < 10:
+            continue
+        kind = hkex_option_kind_from_type(cells[6])
+        strike = format_option_strike(cells[8])
+        last_price = parse_float(cells[9])
+        if not kind or not strike or last_price is None or last_price < 0:
+            continue
+        option_id_match = re.search(r"oID=(\d+)&ucode=", row_html, re.I)
+        quotes[(kind, strike)] = {
+            "option_code": f"HKEX:{option_id_match.group(1)}" if option_id_match else "",
+            "last_price": float(last_price),
+            "source": "HKEX delayed search",
+            "as_of": as_of,
+        }
+    return quotes
+
+
+def fetch_hkex_option_search_total(key: tuple[str, str, str]) -> tuple[int, str]:
+    try:
+        html = request_hkex_option_search(hkex_option_search_params(key, "getTotal"), retries=1)
+    except (TimeoutError, URLError, OSError):
+        return 0, ""
+    return parse_hkex_option_search_total(html)
+
+
+def fetch_hkex_option_search_page(key: tuple[str, str, str], page: int, as_of: str) -> dict[tuple[str, str], dict]:
+    try:
+        html = request_hkex_option_search(hkex_option_search_params(key, "search", page), retries=1)
+    except (TimeoutError, URLError, OSError):
+        return {}
+    return parse_hkex_option_search_rows(html, as_of)
+
+
+def fetch_hkex_option_search_chain_uncached(key: tuple[str, str, str]) -> dict[tuple[str, str], dict]:
+    total, as_of = fetch_hkex_option_search_total(key)
+    if total <= 0:
+        return fetch_hkex_option_search_page(key, 1, as_of)
+    page_count = max(1, min(20, (total + HKEX_SEARCH_PAGE_SIZE - 1) // HKEX_SEARCH_PAGE_SIZE))
+    quotes: dict[tuple[str, str], dict] = {}
+    workers = min(4, page_count)
+    with ThreadPoolExecutor(max_workers=workers) as executor:
+        future_map = {
+            executor.submit(fetch_hkex_option_search_page, key, page, as_of): page
+            for page in range(1, page_count + 1)
+        }
+        for future in as_completed(future_map):
+            try:
+                quotes.update(future.result())
+            except Exception:
+                continue
+    return quotes
+
+
+def fetch_hkex_option_search_chain(core, ticker, event, expiry) -> dict[tuple[str, str], dict]:
+    key = hkex_option_search_key(core, ticker, event, expiry)
+    if key is None:
+        return {}
+    now = time.time()
+    with _HKEX_OPTION_SEARCH_CHAIN_LOCK:
+        cached_entry = _HKEX_OPTION_SEARCH_CHAIN_CACHE.get(key)
+        if isinstance(cached_entry, dict):
+            fetched_at = cached_entry.get("fetched_at")
+            quotes = cached_entry.get("quotes")
+            if isinstance(fetched_at, (int, float)) and now - float(fetched_at) <= HKEX_SEARCH_CACHE_TTL_SECONDS:
+                return quotes if isinstance(quotes, dict) else {}
+        future = _HKEX_OPTION_SEARCH_CHAIN_FUTURES.get(key)
+        if future is None:
+            future = market_data_executor().submit(fetch_hkex_option_search_chain_uncached, key)
+            _HKEX_OPTION_SEARCH_CHAIN_FUTURES[key] = future
+    try:
+        quotes = future.result()
+    except Exception:
+        quotes = {}
+    with _HKEX_OPTION_SEARCH_CHAIN_LOCK:
+        _HKEX_OPTION_SEARCH_CHAIN_CACHE[key] = {"fetched_at": time.time(), "quotes": quotes}
+        if _HKEX_OPTION_SEARCH_CHAIN_FUTURES.get(key) is future:
+            _HKEX_OPTION_SEARCH_CHAIN_FUTURES.pop(key, None)
+    return quotes
+
+
+def fetch_hkex_underlying_price(core, ticker) -> float | None:
+    underlying = clean_text(core.normalize_ticker(ticker, "HKD")).zfill(5)
+    if not underlying:
+        return None
+    now = time.time()
+    cached = _HKEX_UNDERLYING_PRICE_CACHE.get(underlying)
+    if cached and now - cached[1] <= HKEX_SEARCH_CACHE_TTL_SECONDS:
+        return cached[0]
+    quote = fetch_tencent_security_quote(core, underlying, "HKD")
+    price = quote.get("last_price") if isinstance(quote, dict) else None
+    if isinstance(price, (int, float)) and price > 0:
+        _HKEX_UNDERLYING_PRICE_CACHE[underlying] = (float(price), now)
+        return float(price)
+    return None
+
+
+def hkex_option_target_moneyness_range(core, ticker, event, strike) -> tuple[float, float] | None:
+    price = fetch_hkex_underlying_price(core, ticker)
+    strike_value = parse_float(strike)
+    kind = option_kind_for_event(str(event or ""))
+    if price is None or price <= 0 or strike_value is None:
+        return None
+    if kind == "CALL":
+        moneyness = (price - float(strike_value)) / price * 100
+    elif kind == "PUT":
+        moneyness = (float(strike_value) - price) / price * 100
+    else:
+        return None
+    return max(-100.0, moneyness - 2.0), min(100.0, moneyness + 2.0)
+
+
+def fetch_hkex_option_target_search_quote(core, ticker, event, expiry, strike) -> dict | None:
+    key = hkex_option_search_key(core, ticker, event, expiry)
+    target_range = hkex_option_target_moneyness_range(core, ticker, event, strike)
+    kind = option_kind_for_event(str(event or ""))
+    strike_key = format_option_strike(strike)
+    if key is None or target_range is None or not kind or not strike_key:
+        return None
+    for padding in (0.0, 3.0):
+        low, high = target_range
+        low = max(-100.0, low - padding)
+        high = min(100.0, high + padding)
+        try:
+            html = request_hkex_option_search(hkex_option_target_search_params(key, low, high), retries=1)
+        except (TimeoutError, URLError, OSError):
+            continue
+        quotes = parse_hkex_option_search_rows(html)
+        quote = quotes.get((kind, strike_key))
+        if quote_has_price(quote):
+            return quote
+    return None
+
+
+def fetch_hkex_option_search_quote(core, ticker, currency, event, expiry, strike) -> dict | None:
+    if core.normalize_currency(currency) != "HKD":
+        return None
+    kind = option_kind_for_event(str(event or ""))
+    if not kind:
+        return None
+    target_quote = fetch_hkex_option_target_search_quote(core, ticker, event, expiry, strike)
+    if quote_has_price(target_quote):
+        return target_quote
+    quotes = fetch_hkex_option_search_chain(core, ticker, event, expiry)
+    quote = quotes.get((kind, format_option_strike(strike)))
+    return quote if quote_has_price(quote) else None
+
+
 def request_hkex_option_page(
     data: dict[str, str] | None = None,
     option_id: str | None = None,
@@ -776,6 +1022,9 @@ def fetch_hkex_option_chart_last(option_id: str) -> float | None:
 def fetch_hkex_option_quote(core, ticker, currency, event, expiry, strike) -> dict | None:
     if core.normalize_currency(currency) != "HKD":
         return None
+    search_quote = fetch_hkex_option_search_quote(core, ticker, currency, event, expiry, strike)
+    if quote_has_price(search_quote):
+        return search_quote
     underlying = core.normalize_ticker(ticker, currency).zfill(5)
     option_id = fetch_hkex_option_id(core, underlying, event, expiry, strike)
     if not option_id:
