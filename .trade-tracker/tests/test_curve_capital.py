@@ -66,6 +66,21 @@ class CurveCapitalTests(unittest.TestCase):
         self.assertEqual(points[1]["capital"], 2003)
         self.assertEqual(points[2]["capital"], 1001)
 
+    def test_history_curve_keeps_its_own_daily_capital(self):
+        data = {
+            "curve_series": [
+                {
+                    "currency": "人民币",
+                    "source": "history",
+                    "points": [{"serial": 20, "date": "2026/01/20", "value": 100, "capital": 235332.1}],
+                }
+            ]
+        }
+
+        attach_dynamic_curve_capital(FakeCore(), [(2, row(10, 30, 258900, 8.2, 0, 2122446))], data)
+
+        self.assertEqual(data["curve_series"][0]["points"][0]["capital"], 235332.1)
+
 
 if __name__ == "__main__":
     unittest.main()

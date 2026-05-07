@@ -1275,11 +1275,12 @@ details[data-ths-return-curve] .curve-grid {
 }
 
 details[data-ths-return-curve] .curve-card {
+  position: relative;
   border: 0;
   border-radius: 0;
   background: #ffffff;
   box-shadow: none;
-  padding: 10px 18px 18px;
+  padding: 10px 20px 18px;
 }
 
 details[data-ths-return-curve] .curve-card + .curve-card {
@@ -1287,6 +1288,10 @@ details[data-ths-return-curve] .curve-card + .curve-card {
 }
 
 details[data-ths-return-curve] .curve-card-head {
+  display: flex;
+  align-items: flex-end;
+  justify-content: space-between;
+  gap: 16px;
   margin-bottom: 4px;
 }
 
@@ -1309,7 +1314,12 @@ details[data-ths-return-curve] .curve-badge {
 }
 
 details[data-ths-return-curve] .curve-svg {
-  min-height: 250px;
+  display: block;
+  width: 100%;
+  height: auto;
+  aspect-ratio: 620 / 260;
+  margin-top: 2px;
+  overflow: visible;
 }
 
 details[data-ths-return-curve] .curve-axis {
@@ -1342,23 +1352,36 @@ details[data-ths-return-curve] .curve-line-glow {
 
 details[data-ths-return-curve] .curve-benchmark-line {
   fill: none;
-  stroke: #4285f4;
   stroke-width: 1.3px;
   stroke-linecap: round;
   stroke-linejoin: round;
+  stroke: #4285f4;
 }
 
 details[data-ths-return-curve] .curve-line {
   stroke-width: 1.45px;
 }
 
-details[data-ths-return-curve] .curve-card.is-excess-mode .curve-line {
-  stroke: #ff8a00;
+details[data-ths-return-curve] .curve-drawdown-band {
+  fill: rgba(255, 47, 69, 0.055);
+  pointer-events: none;
 }
 
-details[data-ths-return-curve] .curve-card.is-excess-mode .curve-dot,
-details[data-ths-return-curve] .curve-card.is-excess-mode .curve-dot-last {
-  fill: #ff8a00;
+details[data-ths-return-curve] .curve-drawdown-link {
+  fill: none;
+  stroke: rgba(255, 47, 69, 0.5);
+  stroke-width: 1.35px;
+  stroke-dasharray: 4 3;
+  stroke-linecap: round;
+  pointer-events: none;
+}
+
+details[data-ths-return-curve] .curve-drawdown-marker {
+  fill: #ffffff;
+  stroke: #ff2f45;
+  stroke-width: 1.5px;
+  opacity: 0.9;
+  pointer-events: none;
 }
 
 details[data-ths-return-curve] .curve-line-glow {
@@ -1377,21 +1400,138 @@ details[data-ths-return-curve] .curve-benchmark-dot {
   fill: #4285f4;
 }
 
-details[data-ths-return-curve] .ths-dot-excess {
-  background: #ff8a00;
+details[data-ths-return-curve] .curve-hover-layer {
+  pointer-events: none;
 }
 
-details[data-ths-return-curve] .ths-curve-mode-tabs {
+details[data-ths-return-curve] .curve-hover-line {
+  stroke: #6f767d;
+  stroke-dasharray: 3 3;
+  stroke-width: 1px;
+  opacity: 0.55;
+}
+
+details[data-ths-return-curve] .curve-hover-dot {
+  fill: #ffffff;
+  stroke-width: 2px;
+}
+
+details[data-ths-return-curve] .curve-hover-dot-me {
+  stroke: #ff2f45;
+}
+
+details[data-ths-return-curve] .curve-hover-dot-base {
+  stroke: #4285f4;
+}
+
+details[data-ths-return-curve] .curve-tooltip {
+  position: absolute;
+  z-index: 4;
+  min-width: 168px;
+  transform: translate(-50%, -100%);
+  border: 1px solid rgba(32, 33, 36, 0.08);
+  border-radius: 8px;
+  background: rgba(255, 255, 255, 0.96);
+  box-shadow: 0 10px 24px rgba(32, 33, 36, 0.14);
+  color: #202124;
+  font-size: 12px;
+  line-height: 1.45;
+  padding: 8px 10px;
+  pointer-events: none;
+}
+
+details[data-ths-return-curve] .curve-tooltip[hidden] {
+  display: none;
+}
+
+details[data-ths-return-curve] .curve-tooltip-date {
+  margin-bottom: 5px;
+  color: #5f6368;
+  font-weight: 800;
+}
+
+details[data-ths-return-curve] .curve-tooltip div:not(.curve-tooltip-date) {
+  display: flex;
+  justify-content: space-between;
+  gap: 16px;
+}
+
+details[data-ths-return-curve] .curve-tooltip span {
+  color: #7b8288;
+}
+
+details[data-ths-return-curve] .curve-tooltip strong {
+  font-weight: 800;
+}
+
+details[data-ths-return-curve] .curve-tooltip-muted {
+  margin-top: 3px;
+  color: #8d949b;
+}
+
+details[data-ths-return-curve] .curve-risk-caption {
+  display: grid;
+  grid-template-columns: repeat(4, minmax(0, 1fr));
+  gap: 8px;
+  margin: 4px 34px 8px;
+  color: #8d949b;
+  font-size: 12px;
+  font-weight: 700;
+}
+
+details[data-ths-return-curve] .curve-risk-caption[hidden] {
+  display: none;
+}
+
+details[data-ths-return-curve] .curve-risk-caption span {
+  min-width: 0;
+  border: 1px solid #eef1f3;
+  border-radius: 8px;
+  background: #fafbfc;
+  padding: 7px 9px;
+}
+
+details[data-ths-return-curve] .curve-risk-caption em {
+  display: block;
+  overflow: hidden;
+  color: #9aa0a6;
+  font-style: normal;
+  line-height: 1.2;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+details[data-ths-return-curve] .curve-risk-caption strong {
+  display: block;
+  overflow: hidden;
+  margin-top: 3px;
+  color: #34383c;
+  font-size: 12.5px;
+  line-height: 1.2;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+details[data-ths-return-curve] .ths-curve-control-row {
+  display: flex;
+  justify-content: center;
+  border: 1px solid #edf0f2;
+  border-top: 0;
+  background: #ffffff;
+  padding: 0 18px 12px;
+}
+
+details[data-ths-return-curve] .ths-curve-metric-tabs {
   display: inline-flex;
   justify-self: center;
   gap: 2px;
-  margin: 8px 0 0;
+  margin: 0;
   padding: 3px;
   border-radius: 999px;
   background: #f3f5f6;
 }
 
-details[data-ths-return-curve] .ths-curve-mode {
+details[data-ths-return-curve] .ths-curve-metric {
   appearance: none;
   border: 0;
   border-radius: 999px;
@@ -1406,7 +1546,7 @@ details[data-ths-return-curve] .ths-curve-mode {
   white-space: nowrap;
 }
 
-details[data-ths-return-curve] .ths-curve-mode.is-active {
+details[data-ths-return-curve] .ths-curve-metric.is-active {
   background: #ff2f45;
   color: #ffffff;
 }
@@ -1415,6 +1555,11 @@ details[data-ths-return-curve] .curve-label,
 details[data-ths-return-curve] .curve-axis-label {
   fill: #9aa0a6;
   font-size: 12px;
+}
+
+details[data-ths-return-curve] .curve-y-label {
+  fill: #9aa0a6;
+  font-weight: 700;
 }
 
 details[data-ths-return-curve] .curve-end-value {
@@ -1757,6 +1902,15 @@ details[data-ths-return-curve] .ths-curve-bars div:nth-child(2) strong {
 
   details[data-ths-return-curve] .curve-card {
     padding: 10px 10px 16px;
+  }
+
+  details[data-ths-return-curve] .curve-card-head {
+    align-items: flex-start;
+  }
+
+  details[data-ths-return-curve] .curve-risk-caption {
+    grid-template-columns: repeat(2, minmax(0, 1fr));
+    margin: 4px 6px 8px;
   }
 
   details[data-ths-return-curve] .ths-curve-bars {

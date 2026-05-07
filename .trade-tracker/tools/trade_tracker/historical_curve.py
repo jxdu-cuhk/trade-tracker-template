@@ -17,6 +17,7 @@ from .utils import cell_raw, clean_text, core_trade_type, excel_serial_to_date, 
 
 STOCK_EVENTS = {"现股", "Stock", "stock", "STOCK"}
 HISTORY_CACHE_PATH = APP_DIR / "tools" / "cache" / "security_history.json"
+HISTORY_SOURCE_DIR = APP_DIR / "history"
 HISTORY_HTTP_TIMEOUT = 8
 HISTORY_WORKERS = 5
 EPSILON = 0.000001
@@ -41,6 +42,7 @@ class StockCurveLot:
     fee: float
     capital: float
     realized_pnl: float | None
+    source: str = ""
 
     @property
     def is_short(self) -> bool:
@@ -193,7 +195,7 @@ def fetch_tencent_history_points(symbol: str, start: date, end: date) -> list[Se
         return []
     day_count = max((end - start).days + 10, 120)
     params = {
-        "param": f"{symbol},day,{start.isoformat()},{end.isoformat()},{day_count},qfq",
+        "param": f"{symbol},day,{start.isoformat()},{end.isoformat()},{day_count},",
     }
     url = "https://web.ifzq.gtimg.cn/appstock/app/fqkline/get?" + urlencode(params)
     request = Request(url, headers={"User-Agent": "Mozilla/5.0"})
@@ -205,7 +207,7 @@ def fetch_tencent_history_points(symbol: str, start: date, end: date) -> list[Se
     data = (payload.get("data") or {}).get(symbol) if isinstance(payload, dict) else None
     if not isinstance(data, dict):
         return []
-    rows = data.get("qfqday") or data.get("day") or []
+    rows = data.get("day") or data.get("qfqday") or []
     return parse_tencent_kline_rows(rows)
 
 
@@ -339,6 +341,15 @@ def normalize_currency_label(core, currency: object) -> tuple[str, str]:
     return display_currency_label(core, normalized), clean_text(normalized)
 
 
+def imported_trade_source_from_note(note: object) -> str:
+    text = clean_text(note)
+    prefix = "导入自 "
+    suffix = " 成交记录"
+    if not text.startswith(prefix) or suffix not in text:
+        return ""
+    return clean_text(text[len(prefix) : text.find(suffix)])
+
+
 def stock_lot_from_row(core, cells: dict[int, object]) -> StockCurveLot | None:
     event = raw_text_value(core, cells, 6)
     if event not in STOCK_EVENTS:
@@ -390,7 +401,128 @@ def stock_lot_from_row(core, cells: dict[int, object]) -> StockCurveLot | None:
         fee=fee,
         capital=abs(float(capital)),
         realized_pnl=realized_pnl,
+        source=imported_trade_source_from_note(raw_text_value(core, cells, 18)),
     )
+
+
+def raw_trade_date(value: object) -> date | None:
+    return excel_serial_to_date(value)
+
+
+def raw_trade_side(value: object) -> str:
+    text = clean_text(value)
+    if "买入" in text or "买券" in text:
+        return "buy"
+    if "卖出" in text or "卖券" in text:
+        return "sell"
+    return ""
+
+
+def source_workbook_path(source: str):
+    source = clean_text(source)
+    return HISTORY_SOURCE_DIR / f"{source}.xlsx" if source else None
+
+
+def load_raw_source_closed_lots(core, sources: set[str]) -> list[StockCurveLot]:
+    try:
+        from openpyxl import load_workbook
+    except ImportError:
+        return []
+
+    all_lots: list[StockCurveLot] = []
+    for source in sorted(clean_text(item) for item in sources if clean_text(item)):
+        path = source_workbook_path(source)
+        if path is None or not path.exists():
+            continue
+        try:
+            workbook = load_workbook(path, read_only=True, data_only=True)
+        except OSError:
+            continue
+        try:
+            if "交易记录" not in workbook.sheetnames:
+                continue
+            currency, currency_raw = normalize_currency_label(core, "人民币")
+            open_positions: dict[str, list[dict[str, float | date | str]]] = {}
+            for row in workbook["交易记录"].iter_rows(min_row=2, values_only=True):
+                if len(row) < 10:
+                    continue
+                trade_date = raw_trade_date(row[0])
+                side = raw_trade_side(row[4])
+                quantity = parse_float(row[5])
+                price = parse_float(row[6])
+                amount = parse_float(row[8])
+                fee = abs(parse_float(row[9]) or 0.0)
+                if trade_date is None or not side or quantity is None or price is None:
+                    continue
+                quantity = abs(float(quantity))
+                price = float(price)
+                if quantity <= EPSILON or price <= 0:
+                    continue
+                try:
+                    ticker = clean_text(core.normalize_ticker(row[2], currency_raw))
+                except Exception:
+                    ticker = clean_text(row[2]).upper()
+                if not ticker:
+                    continue
+                if side == "buy":
+                    capital = abs(float(amount)) if amount is not None and abs(float(amount)) > EPSILON else quantity * price
+                    open_positions.setdefault(ticker, []).append(
+                        {
+                            "date": trade_date,
+                            "quantity": quantity,
+                            "remaining": quantity,
+                            "price": price,
+                            "fee": fee,
+                            "remaining_fee": fee,
+                            "capital": capital + fee,
+                            "remaining_capital": capital + fee,
+                        }
+                    )
+                    continue
+
+                sell_remaining = quantity
+                sell_fee_remaining = fee
+                sell_queue = open_positions.get(ticker, [])
+                while sell_remaining > EPSILON and sell_queue:
+                    buy_lot = sell_queue[0]
+                    buy_remaining = float(buy_lot.get("remaining") or 0.0)
+                    if buy_remaining <= EPSILON:
+                        sell_queue.pop(0)
+                        continue
+                    matched_qty = min(buy_remaining, sell_remaining)
+                    buy_ratio = matched_qty / buy_remaining if buy_remaining > EPSILON else 0.0
+                    sell_ratio = matched_qty / sell_remaining if sell_remaining > EPSILON else 0.0
+                    buy_fee = float(buy_lot.get("remaining_fee") or 0.0) * buy_ratio
+                    sell_fee = sell_fee_remaining * sell_ratio
+                    buy_capital = float(buy_lot.get("remaining_capital") or 0.0) * buy_ratio
+                    open_price = float(buy_lot["price"])
+                    realized_pnl = (price - open_price) * matched_qty - buy_fee - sell_fee
+                    all_lots.append(
+                        StockCurveLot(
+                            ticker=ticker,
+                            currency=currency,
+                            currency_raw=currency_raw,
+                            open_date=buy_lot["date"],
+                            close_date=trade_date,
+                            quantity=matched_qty,
+                            open_price=open_price,
+                            close_price=price,
+                            fee=buy_fee + sell_fee,
+                            capital=buy_capital,
+                            realized_pnl=realized_pnl,
+                            source=source,
+                        )
+                    )
+                    buy_lot["remaining"] = buy_remaining - matched_qty
+                    buy_lot["remaining_fee"] = float(buy_lot.get("remaining_fee") or 0.0) - buy_fee
+                    buy_lot["remaining_capital"] = float(buy_lot.get("remaining_capital") or 0.0) - buy_capital
+                    sell_remaining -= matched_qty
+                    sell_fee_remaining -= sell_fee
+                    if float(buy_lot.get("remaining") or 0.0) <= EPSILON:
+                        sell_queue.pop(0)
+        finally:
+            workbook.close()
+    return all_lots
 
 
 def non_stock_realized_event_from_row(core, cells: dict[int, object]) -> RealizedCurveEvent | None:
@@ -421,6 +553,12 @@ def build_stock_lots(core, rows: list[tuple[int, dict[int, object]]]) -> list[St
         lot = stock_lot_from_row(core, cells)
         if lot:
             lots.append(lot)
+    aggregate_sources = {lot.source for lot in lots if lot.source and lot.close_date is not None}
+    detailed_lots = load_raw_source_closed_lots(core, aggregate_sources)
+    detailed_sources = {lot.source for lot in detailed_lots}
+    if detailed_sources:
+        lots = [lot for lot in lots if not (lot.source in detailed_sources and lot.close_date is not None)]
+        lots.extend(detailed_lots)
     return lots
 
 
@@ -552,11 +690,33 @@ def close_for_day(history: dict[date, float], day: date) -> float | None:
     return history[max(candidates)]
 
 
-def unrealized_pnl(lot: StockCurveLot, price: float) -> float:
+def lot_price_pnl(lot: StockCurveLot, entry_price: float, price: float) -> float:
     gross_qty = abs(lot.quantity)
     if lot.is_short:
-        return (lot.open_price - price) * gross_qty - lot.fee
-    return (price - lot.open_price) * gross_qty - lot.fee
+        return (entry_price - price) * gross_qty - lot.fee
+    return (price - entry_price) * gross_qty - lot.fee
+
+
+def unrealized_pnl(lot: StockCurveLot, price: float, entry_price: float | None = None) -> float:
+    return lot_price_pnl(lot, entry_price if entry_price is not None else lot.open_price, price)
+
+
+def mark_price_for_day(lot: StockCurveLot, day: date, history: dict[date, float]) -> float | None:
+    return close_for_day(history, day)
+
+
+def entry_price_for_curve(lot: StockCurveLot, history: dict[date, float]) -> float:
+    return close_for_day(history, lot.open_date) or lot.open_price
+
+
+def realized_pnl_for_curve(lot: StockCurveLot, history: dict[date, float]) -> float:
+    entry_price = entry_price_for_curve(lot, history)
+    close_price = lot.close_price
+    if close_price is None and lot.close_date is not None:
+        close_price = close_for_day(history, lot.close_date)
+    if close_price is None:
+        return float(lot.realized_pnl or 0.0)
+    return lot_price_pnl(lot, entry_price, close_price)
 
 
 def point_dates_for_currency(lots: list[StockCurveLot], histories: dict[tuple[str, str], dict[date, float]], events: list[RealizedCurveEvent]) -> dict[str, set[date]]:
@@ -593,7 +753,11 @@ def build_historical_curve_series(core, rows: list[tuple[int, dict[int, object]]
         points: list[dict[str, object]] = []
         last_capital = 0.0
         for day in sorted(days):
-            realized_total = sum((lot.realized_pnl or 0.0) for lot in currency_lots if lot.close_date and lot.close_date <= day)
+            realized_total = sum(
+                realized_pnl_for_curve(lot, histories.get((lot.ticker, lot.currency), {}))
+                for lot in currency_lots
+                if lot.close_date and lot.close_date <= day
+            )
             realized_total += sum(event.pnl for event in currency_events if event.event_date <= day)
             unrealized_total = 0.0
             active_capital = 0.0
@@ -601,11 +765,12 @@ def build_historical_curve_series(core, rows: list[tuple[int, dict[int, object]]
             for lot in currency_lots:
                 if not (lot.open_date <= day and (lot.close_date is None or day < lot.close_date)):
                     continue
-                price = close_for_day(histories.get((lot.ticker, lot.currency), {}), day)
+                history = histories.get((lot.ticker, lot.currency), {})
+                price = mark_price_for_day(lot, day, history)
                 if price is None:
                     continue
                 has_active_price = True
-                unrealized_total += unrealized_pnl(lot, price)
+                unrealized_total += unrealized_pnl(lot, price, entry_price_for_curve(lot, history))
                 active_capital += lot.capital
             if active_capital > EPSILON:
                 last_capital = active_capital

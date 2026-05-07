@@ -117,9 +117,9 @@ def render_ths_curve_top(total_pnl: str, return_rate: str) -> str:
     rate_class = value_tone_class(rate_text)
     return f"""
             <div class="ths-curve-hero">
-              <div class="ths-curve-kicker">全部盈亏</div>
-              <div class="ths-curve-value {html.escape(total_class)}">{html.escape(total_text)}</div>
-              <div class="ths-curve-rate"><span class="ths-curve-badge">账</span> 净资产收益率 <strong class="{html.escape(rate_class)}">{html.escape(rate_text)}</strong></div>
+              <div class="ths-curve-kicker" data-curve-hero-kicker>全部盈亏</div>
+              <div class="ths-curve-value {html.escape(total_class)}" data-curve-hero-value>{html.escape(total_text)}</div>
+              <div class="ths-curve-rate"><span class="ths-curve-badge">账</span> <span data-curve-hero-rate-label>净资产收益率</span> <strong class="{html.escape(rate_class)}" data-curve-hero-rate>{html.escape(rate_text)}</strong></div>
               <div class="ths-curve-tabs" aria-label="收益曲线时间范围">
                 <button type="button" class="ths-curve-tab" data-curve-range="day">当日</button>
                 <button type="button" class="ths-curve-tab" data-curve-range="month">本月</button>
@@ -138,11 +138,12 @@ def render_ths_curve_top(total_pnl: str, return_rate: str) -> str:
             <div class="ths-curve-legend" aria-label="收益曲线图例">
               <span><i class="ths-dot ths-dot-me"></i>我</span>
               <span><i class="ths-dot ths-dot-base"></i>上证指数</span>
-              <span><i class="ths-dot ths-dot-excess"></i>超额收益</span>
             </div>
-            <div class="ths-curve-mode-tabs" aria-label="收益曲线类型">
-              <button type="button" class="ths-curve-mode is-active" data-curve-mode="compare">收益对比</button>
-              <button type="button" class="ths-curve-mode" data-curve-mode="excess">超额收益</button>
+            <div class="ths-curve-control-row">
+              <div class="ths-curve-metric-tabs" aria-label="收益曲线口径">
+                <button type="button" class="ths-curve-metric is-active" data-curve-metric="return">收益率</button>
+                <button type="button" class="ths-curve-metric" data-curve-metric="amount">盈亏金额</button>
+              </div>
             </div>
 """
 
@@ -194,7 +195,7 @@ def apply_tonghuashun_curve_style(html_text: str) -> str:
     )
     section = re.sub(
         r'<p class="section-note">.*?</p>',
-        '<p class="section-note">港币和美元按当前汇率折成人民币后合并展示；红线按当时持仓成本计算，蓝线对比上证指数。</p>',
+        '<p class="section-note">港币和美元按当前汇率折成人民币后合并展示；红线按区间持仓资金归一，蓝线对比上证指数。</p>',
         section,
         count=1,
         flags=re.S,

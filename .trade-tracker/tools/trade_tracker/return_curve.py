@@ -294,22 +294,34 @@ def render_curve_card(index: int, series: dict[str, object]) -> str:
                     </div>
                     <div class="curve-badge" data-curve-badge>--</div>
                   </div>
-                  <svg class="curve-svg" viewBox="0 0 620 220" role="img" aria-label="{html.escape(currency)}累计收益曲线">
-                    <line class="curve-axis" x1="52" y1="16" x2="52" y2="186"></line>
-                    <line class="curve-axis" x1="52" y1="186" x2="602" y2="186"></line>
+                  <svg class="curve-svg" viewBox="0 0 620 260" role="img" aria-label="{html.escape(currency)}累计收益曲线">
+                    <line class="curve-axis" x1="34" y1="18" x2="34" y2="216"></line>
+                    <line class="curve-axis" x1="34" y1="216" x2="564" y2="216"></line>
                     <g data-curve-grid-lines></g>
-                    <line class="curve-zero-line" x1="52" y1="186" x2="602" y2="186" data-curve-zero-line></line>
+                    <g data-curve-y-labels></g>
+                    <line class="curve-zero-line" x1="34" y1="216" x2="564" y2="216" data-curve-zero-line></line>
+                    <rect class="curve-drawdown-band" data-curve-drawdown-band></rect>
                     <path class="curve-benchmark-line" data-curve-benchmark-line></path>
                     <path class="curve-area" data-curve-area></path>
                     <path class="curve-line-glow" data-curve-line-glow></path>
                     <path class="curve-line" data-curve-line></path>
+                    <path class="curve-drawdown-link" data-curve-drawdown-link></path>
                     <g data-curve-dots></g>
-                    <text class="curve-axis-label" x="52" y="210" text-anchor="start" data-curve-start-label>--</text>
-                    <text class="curve-axis-label" x="602" y="210" text-anchor="end" data-curve-end-label>--</text>
-                    <text class="curve-axis-label" x="8" y="26" data-curve-max-label>--</text>
-                    <text class="curve-axis-label" x="8" y="186" data-curve-min-label>--</text>
-                    <text class="curve-end-value" x="612" y="16" data-curve-end-value>--</text>
+                    <g class="curve-drawdown-layer" data-curve-drawdown-layer>
+                      <circle class="curve-drawdown-marker curve-drawdown-peak" data-curve-drawdown-peak></circle>
+                      <circle class="curve-drawdown-marker curve-drawdown-trough" data-curve-drawdown-trough></circle>
+                    </g>
+                    <g class="curve-hover-layer" data-curve-hover-layer>
+                      <line class="curve-hover-line" data-curve-hover-line></line>
+                      <circle class="curve-hover-dot curve-hover-dot-me" data-curve-hover-dot-me></circle>
+                      <circle class="curve-hover-dot curve-hover-dot-base" data-curve-hover-dot-base></circle>
+                    </g>
+                    <text class="curve-axis-label" x="34" y="246" text-anchor="start" data-curve-start-label>--</text>
+                    <text class="curve-axis-label" x="564" y="246" text-anchor="end" data-curve-end-label>--</text>
+                    <text class="curve-end-value" x="574" y="18" data-curve-end-value>--</text>
                   </svg>
+                  <div class="curve-tooltip" data-curve-tooltip hidden></div>
+                  <div class="curve-risk-caption" data-curve-drawdown-caption hidden></div>
                 </div>
 """
 
@@ -336,11 +348,11 @@ def render_curve_script(payload: list[dict[str, object]]) -> str:
 
                   const dims = {{
                     width: 620,
-                    height: 220,
-                    left: 52,
-                    right: 18,
-                    top: 16,
-                    bottom: 34,
+                    height: 260,
+                    left: 34,
+                    right: 56,
+                    top: 18,
+                    bottom: 42,
                   }};
                   dims.innerWidth = dims.width - dims.left - dims.right;
                   dims.innerHeight = dims.height - dims.top - dims.bottom;
@@ -348,6 +360,11 @@ def render_curve_script(payload: list[dict[str, object]]) -> str:
                   function moneyText(value) {{
                     if (!Number.isFinite(value)) return '--';
                     return value.toLocaleString('zh-CN', {{ minimumFractionDigits: 2, maximumFractionDigits: 2 }});
+                  }}
+
+                  function signedMoneyText(value) {{
+                    if (!Number.isFinite(value)) return '--';
+                    return `${{value > 0 ? '+' : ''}}${{moneyText(value)}}`;
                   }}
 
                   function compactMoneyText(value) {{
@@ -362,6 +379,22 @@ def render_curve_script(payload: list[dict[str, object]]) -> str:
                     if (!Number.isFinite(value)) return '--';
                     const sign = value > 0 ? '+' : '';
                     return `${{sign}}${{value.toFixed(2)}}%`;
+                  }}
+
+                  function numberFromText(text) {{
+                    const cleaned = String(text || '').replace(/,/g, '').replace(/[^0-9.+-]/g, '');
+                    const parsed = Number(cleaned);
+                    return Number.isFinite(parsed) ? parsed : NaN;
+                  }}
+
+                  function liveDailyReference() {{
+                    const panel = document.querySelector('[data-holdings-reference-card] [data-holdings-range-panel="day"]');
+                    const valueNode = panel?.querySelector('.holdings-account-value');
+                    const detailNodes = panel ? Array.from(panel.querySelectorAll('.holdings-realized-text span')) : [];
+                    const pnl = numberFromText(valueNode?.textContent || '');
+                    const returnValue = numberFromText(detailNodes[1]?.textContent || '');
+                    if (!Number.isFinite(pnl) && !Number.isFinite(returnValue)) return null;
+                    return {{ pnl, returnValue }};
                   }}
 
                   function classForValue(value) {{
@@ -394,6 +427,20 @@ def render_curve_script(payload: list[dict[str, object]]) -> str:
                     const month = String(parsed.getUTCMonth() + 1).padStart(2, '0');
                     const day = String(parsed.getUTCDate()).padStart(2, '0');
                     return `${{year}}/${{month}}/${{day}}`;
+                  }}
+
+                  function previousPointFrom(point) {{
+                    const parsed = parseDate(point?.iso);
+                    const serial = Number(point?.serial || NaN);
+                    const priorDate = parsed ? new Date(parsed.getTime() - 86400000) : null;
+                    const iso = priorDate ? isoFromDate(priorDate) : String(point?.iso || '');
+                    const serialValue = Number.isFinite(serial) ? serial - 1 : serialFromIso(iso);
+                    return {{
+                      ...(point || {{}}),
+                      iso,
+                      date: iso ? dateLabelFromIso(iso) : String(point?.date || ''),
+                      serial: Number.isFinite(serialValue) ? serialValue : 0,
+                    }};
                   }}
 
                   function shiftMonths(date, months) {{
@@ -443,10 +490,28 @@ def render_curve_script(payload: list[dict[str, object]]) -> str:
                     return latest;
                   }}
 
+                  function rangePnlLabel(range) {{
+                    if (range === 'day') return '当日盈亏';
+                    if (range === 'month') return '本月盈亏';
+                    if (range === 'three-month') return '近三月盈亏';
+                    if (range === 'year') return '今年盈亏';
+                    if (range === 'three-year') return '近三年盈亏';
+                    if (range === 'custom') return '阶段盈亏';
+                    return '全部盈亏';
+                  }}
+
+                  function rangeRateLabel(range) {{
+                    return range === 'all' ? '累计收益率' : '区间收益率';
+                  }}
+
                   function filteredPoints(points, range, latest, customStart, customEnd) {{
                     const start = rangeStart(range, latest, customStart);
                     const end = rangeEnd(range, latest, customEnd);
                     const source = (points || []).filter((point) => point && point.iso);
+                    if (range === 'day') {{
+                      const dayPoints = source.filter((point) => !end || point.iso <= end).slice(-2);
+                      return dayPoints.length ? dayPoints : source.slice(-1);
+                    }}
                     const filtered = source.filter((point) => {{
                       if (start && point.iso < start) return false;
                       if (end && point.iso > end) return false;
@@ -473,6 +538,7 @@ def render_curve_script(payload: list[dict[str, object]]) -> str:
                     const start = rangeStart(range, latest, customStart);
                     const source = (points || []).filter((point) => point && point.iso);
                     if (!source.length) return NaN;
+                    if (range === 'day') return Number(visiblePoints[0]?.close || source.filter((point) => point.iso < start).slice(-1)[0]?.close || source[0]?.close || 0);
                     if (!start) return Number(visiblePoints[0]?.close || source[0]?.close || 0);
                     const anchor = source.filter((point) => point.iso <= start).slice(-1)[0];
                     return Number(anchor?.close || visiblePoints[0]?.close || source[0]?.close || 0);
@@ -482,30 +548,202 @@ def render_curve_script(payload: list[dict[str, object]]) -> str:
                     return positions.map((point, index) => `${{index ? 'L' : 'M'}} ${{point[0].toFixed(2)}} ${{point[1].toFixed(2)}}`).join(' ');
                   }}
 
-                  function benchmarkReturnAtSerial(benchmarkValues, serial) {{
+                  function valueForMetric(point, metric) {{
+                    return Number(metric === 'amount' ? point?.amountValue : point?.returnValue);
+                  }}
+
+                  function metricText(value, metric) {{
+                    return metric === 'amount' ? signedMoneyText(value) : percentText(value);
+                  }}
+
+                  function axisText(value, metric) {{
+                    if (metric !== 'amount') return percentText(value);
+                    if (!Number.isFinite(value)) return '--';
+                    const sign = value > 0 ? '+' : '';
+                    return `${{sign}}${{compactMoneyText(value)}}`;
+                  }}
+
+                  function niceStep(rawStep) {{
+                    const step = Math.abs(Number(rawStep || 0));
+                    if (!Number.isFinite(step) || step <= 0) return 1;
+                    const exponent = Math.floor(Math.log10(step));
+                    const base = Math.pow(10, exponent);
+                    const fraction = step / base;
+                    if (fraction >= 5) return 5 * base;
+                    if (fraction >= 2) return 2 * base;
+                    return base;
+                  }}
+
+                  function niceScale(minValue, maxValue, metric) {{
+                    let low = Number(minValue);
+                    let high = Number(maxValue);
+                    if (!Number.isFinite(low)) low = 0;
+                    if (!Number.isFinite(high)) high = 0;
+                    if (Math.abs(high - low) < 1e-9) {{
+                      const fallback = metric === 'amount' ? 10000 : 1;
+                      low -= fallback;
+                      high += fallback;
+                    }}
+                    const padding = Math.max((high - low) * 0.08, metric === 'amount' ? 1000 : 0.2);
+                    low -= padding;
+                    high += padding;
+                    if (low > 0) low = 0;
+                    if (high < 0) high = 0;
+                    const step = niceStep((high - low) / 4);
+                    const niceMin = Math.floor(low / step) * step;
+                    const niceMax = Math.ceil(high / step) * step;
+                    const ticks = [];
+                    for (let value = niceMin; value <= niceMax + step / 2; value += step) {{
+                      ticks.push(Math.abs(value) < step / 1000000 ? 0 : value);
+                    }}
+                    return {{ min: niceMin, max: niceMax, ticks }};
+                  }}
+
+                  function daysBetween(startPoint, endPoint) {{
+                    const start = Number(startPoint?.serial);
+                    const end = Number(endPoint?.serial);
+                    if (!Number.isFinite(start) || !Number.isFinite(end)) return NaN;
+                    return Math.max(0, Math.round(end - start));
+                  }}
+
+                  function daysText(days) {{
+                    if (!Number.isFinite(days)) return '--';
+                    return days <= 0 ? '当日' : `${{days}}天`;
+                  }}
+
+                  function pointAtOrBeforeSerial(points, serial) {{
                     let selected = null;
-                    for (const point of benchmarkValues) {{
+                    for (const point of points || []) {{
                       if (Number(point.serial) <= serial) selected = point;
                       if (Number(point.serial) > serial) break;
                     }}
-                    return selected ? Number(selected.returnValue) : NaN;
+                    return selected;
                   }}
 
-                  function excessValuesFor(accountValues, benchmarkValues) {{
-                    if (!benchmarkValues.length) return [];
-                    return accountValues.map((point) => {{
-                      const benchmarkReturn = benchmarkReturnAtSerial(benchmarkValues, Number(point.serial));
-                      if (!Number.isFinite(benchmarkReturn)) return null;
-                      return {{
-                        ...point,
-                        returnValue: Number(point.returnValue) - benchmarkReturn,
-                        benchmarkReturn,
-                      }};
-                    }}).filter(Boolean);
+                  function setSvgHidden(node, hidden) {{
+                    if (!node) return;
+                    node.style.display = hidden ? 'none' : '';
                   }}
 
-                  function drawCard(card, series, range, latest, customStart, customEnd, mode) {{
-                    const points = filteredPoints(series.points || [], range, latest, customStart, customEnd);
+                  function drawdownNav(point) {{
+                    const returnValue = Number(point?.returnValue);
+                    if (!Number.isFinite(returnValue)) return NaN;
+                    return 1 + returnValue / 100;
+                  }}
+
+                  function maxDrawdownFor(points) {{
+                    let peak = null;
+                    let result = null;
+                    (points || []).forEach((point, index) => {{
+                      const nav = drawdownNav(point);
+                      const amount = Number(point?.amountValue || 0);
+                      if (!Number.isFinite(nav) || nav <= 0) return;
+                      if (!peak || nav > peak.nav) {{
+                        peak = {{ point, index, nav, amount }};
+                      }}
+                      if (!peak || index <= peak.index) return;
+                      const amountDrop = amount - peak.amount;
+                      const rateDrop = peak.nav > 0 ? ((nav / peak.nav) - 1) * 100 : NaN;
+                      if (Number.isFinite(rateDrop) && (!result || rateDrop < result.rate)) {{
+                        result = {{
+                          peak: peak.point,
+                          trough: point,
+                          peakIndex: peak.index,
+                          troughIndex: index,
+                          amount: amountDrop,
+                          rate: rateDrop,
+                          peakNav: peak.nav,
+                          troughNav: nav,
+                        }};
+                      }}
+                    }});
+                    if (result) {{
+                      result.durationDays = daysBetween(result.peak, result.trough);
+                      const recovery = (points || []).slice(result.troughIndex + 1).find((point) => {{
+                        const nav = drawdownNav(point);
+                        return Number.isFinite(nav) && nav >= result.peakNav;
+                      }});
+                      if (recovery) {{
+                        result.recovery = recovery;
+                        result.recoveryDays = daysBetween(result.trough, recovery);
+                      }}
+                    }}
+                    return result && result.rate < 0 ? result : null;
+                  }}
+
+                  function installHoverHandlers(card) {{
+                    if (card.dataset.curveHoverBound === '1') return;
+                    const svg = card.querySelector('.curve-svg');
+                    const tooltip = card.querySelector('[data-curve-tooltip]');
+                    if (!svg || !tooltip) return;
+                    const hide = () => {{
+                      tooltip.hidden = true;
+                      const state = card._curveHoverState || {{}};
+                      setSvgHidden(state.hoverLayer, true);
+                    }};
+                    const move = (event) => {{
+                      const state = card._curveHoverState;
+                      if (!state || !state.points || !state.points.length) return hide();
+                      const svgRect = svg.getBoundingClientRect();
+                      const viewX = ((event.clientX - svgRect.left) / Math.max(svgRect.width, 1)) * dims.width;
+                      if (viewX < dims.left || viewX > dims.width - dims.right) return hide();
+                      let selected = state.points[0];
+                      state.points.forEach((point) => {{
+                        if (Math.abs(point.x - viewX) < Math.abs(selected.x - viewX)) selected = point;
+                      }});
+                      if (!selected) return hide();
+                      const benchmark = selected.benchmark;
+                      if (state.hoverLine) {{
+                        state.hoverLine.setAttribute('x1', selected.x.toFixed(2));
+                        state.hoverLine.setAttribute('x2', selected.x.toFixed(2));
+                        state.hoverLine.setAttribute('y1', String(dims.top));
+                        state.hoverLine.setAttribute('y2', String(dims.top + dims.innerHeight));
+                      }}
+                      if (state.hoverDotMe) {{
+                        state.hoverDotMe.setAttribute('cx', selected.x.toFixed(2));
+                        state.hoverDotMe.setAttribute('cy', selected.y.toFixed(2));
+                        state.hoverDotMe.setAttribute('r', '4.5');
+                      }}
+                      if (state.hoverDotBase) {{
+                        if (benchmark) {{
+                          state.hoverDotBase.setAttribute('cx', benchmark.x.toFixed(2));
+                          state.hoverDotBase.setAttribute('cy', benchmark.y.toFixed(2));
+                          state.hoverDotBase.setAttribute('r', '4.2');
+                        }}
+                        setSvgHidden(state.hoverDotBase, !benchmark);
+                      }}
+                      setSvgHidden(state.hoverLayer, false);
+                      const dailyValue = state.metric === 'amount'
+                        ? selected.accountDailyAmount
+                        : selected.accountDailyReturn;
+                      const benchmarkDaily = benchmark
+                        ? (state.metric === 'amount' ? benchmark.dailyAmountValue : benchmark.dailyReturn)
+                        : NaN;
+                      tooltip.innerHTML = `
+                        <div class="curve-tooltip-date">${{selected.date}}</div>
+                        <div><span>我</span><strong>${{metricText(selected.accountValue, state.metric)}}</strong></div>
+                        <div><span>${{state.benchmarkLabel}}</span><strong>${{benchmark ? metricText(benchmark.value, state.metric) : '--'}}</strong></div>
+                        <div class="curve-tooltip-muted"><span>当日</span><strong>${{metricText(dailyValue, state.metric)}}</strong></div>
+                        <div class="curve-tooltip-muted"><span>基准当日</span><strong>${{benchmark ? metricText(benchmarkDaily, state.metric) : '--'}}</strong></div>
+                      `;
+                      const cardRect = card.getBoundingClientRect();
+                      const left = svgRect.left - cardRect.left + (selected.x / dims.width) * svgRect.width;
+                      const top = svgRect.top - cardRect.top + (Math.min(selected.y, benchmark?.y ?? selected.y) / dims.height) * svgRect.height;
+                      const safeLeft = Math.max(88, Math.min(cardRect.width - 88, left));
+                      tooltip.style.left = `${{safeLeft}}px`;
+                      tooltip.style.top = `${{Math.max(12, top - 10)}}px`;
+                      tooltip.hidden = false;
+                    }};
+                    svg.addEventListener('pointermove', move);
+                    svg.addEventListener('pointerleave', hide);
+                    svg.addEventListener('pointercancel', hide);
+                    card.dataset.curveHoverBound = '1';
+                    hide();
+                  }}
+
+                  function drawCard(card, series, range, latest, customStart, customEnd, metric) {{
+                    metric = metric === 'amount' ? 'amount' : 'return';
+                    let points = filteredPoints(series.points || [], range, latest, customStart, customEnd);
                     const rawBenchmarkPoints = series.benchmark?.points || [];
                     const benchmarkPoints = series.benchmark
                       ? filteredPoints(series.benchmark.points || [], range, latest, customStart, customEnd)
@@ -515,41 +753,111 @@ def render_curve_script(payload: list[dict[str, object]]) -> str:
                     const capital = Number(series.capital) > 0
                       ? Number(series.capital)
                       : Math.max(Math.abs(Number(points[points.length - 1]?.value || 0)), 1);
-                    const startValue = Number(points[0].value || 0);
+                    let startValue = range === 'all' ? 0 : Number(points[0].value || 0);
                     function capitalForPoint(point) {{
                       const pointCapital = Number(point?.capital || 0);
                       return pointCapital > 0 ? pointCapital : capital;
                     }}
-                    const accountValues = points.map((point) => ({{
-                      ...point,
-                      returnValue: ((Number(point.value || 0) - startValue) / capitalForPoint(point)) * 100,
-                    }}));
-                    const firstBenchmarkClose = benchmarkBaseClose(rawBenchmarkPoints, range, latest, customStart, customEnd, benchmarkPoints);
-                    const benchmarkValues = firstBenchmarkClose > 0
-                      ? benchmarkPoints.map((point) => ({{
+                    let baseCapital = range === 'all' ? capital : capitalForPoint(points[0]);
+                    if (!Number.isFinite(baseCapital) || baseCapital <= 0) baseCapital = capital;
+                    function referenceCapitalFor(visiblePoints, fallbackCapital) {{
+                      const capitals = (visiblePoints || [])
+                        .map((point) => capitalForPoint(point))
+                        .filter((value) => Number.isFinite(value) && value > 0);
+                      if (!capitals.length) return fallbackCapital > 0 ? fallbackCapital : capital;
+                      return Math.max(...capitals);
+                    }}
+                    let referenceCapital = referenceCapitalFor(points, baseCapital);
+                    function returnBaseForPoint(point, previousPoint) {{
+                      const previousCapital = capitalForPoint(previousPoint);
+                      if (previousCapital > 0) return previousCapital;
+                      const currentCapital = capitalForPoint(point);
+                      if (currentCapital > 0) return currentCapital;
+                      return baseCapital;
+                    }}
+                    function accountValuesFrom(visiblePoints, periodCapital) {{
+                      return visiblePoints.map((point, index) => {{
+                        const previousPoint = index > 0 ? visiblePoints[index - 1] : null;
+                        const delta = previousPoint ? Number(point.value || 0) - Number(previousPoint.value || 0) : 0;
+                        const returnBase = returnBaseForPoint(point, previousPoint);
+                        const dailyReturn = returnBase > 0 ? (delta / returnBase) * 100 : 0;
+                        const cumulativeAmount = Number(point.value || 0) - startValue;
+                        const cumulativeReturn = periodCapital > 0 ? (cumulativeAmount / periodCapital) * 100 : 0;
+                        return {{
                           ...point,
-                          returnValue: ((Number(point.close || 0) / firstBenchmarkClose) - 1) * 100,
-                        }}))
+                          dailyAmountValue: delta,
+                          dailyReturn,
+                          amountValue: cumulativeAmount,
+                          cumulativeAmountValue: cumulativeAmount,
+                          baseCapital: returnBase > 0 ? returnBase : baseCapital,
+                          referenceCapital: periodCapital,
+                          returnValue: cumulativeReturn,
+                          cumulativeReturnValue: cumulativeReturn,
+                        }};
+                      }});
+                    }}
+                    let accountValues = accountValuesFrom(points, referenceCapital);
+                    const liveDaily = range === 'day' ? liveDailyReference() : null;
+                    if (liveDaily && Number.isFinite(liveDaily.pnl)) {{
+                      const endPoint = points[points.length - 1] || {{}};
+                      const startPoint = points.length > 1 ? points[0] : previousPointFrom(endPoint);
+                      const dayCapital = capitalForPoint(endPoint);
+                      const dayReturn = Number.isFinite(liveDaily.returnValue)
+                        ? liveDaily.returnValue
+                        : (dayCapital ? (liveDaily.pnl / dayCapital) * 100 : NaN);
+                      points = [
+                        {{ ...startPoint, value: 0, capital: dayCapital }},
+                        {{ ...endPoint, value: liveDaily.pnl, capital: dayCapital }},
+                      ];
+                      startValue = 0;
+                      baseCapital = dayCapital;
+                      referenceCapital = dayCapital;
+                      accountValues = [
+                        {{ ...points[0], dailyAmountValue: 0, amountValue: 0, cumulativeAmountValue: 0, baseCapital, referenceCapital, dailyReturn: 0, returnValue: 0, cumulativeReturnValue: 0 }},
+                        {{ ...points[1], dailyAmountValue: liveDaily.pnl, amountValue: liveDaily.pnl, cumulativeAmountValue: liveDaily.pnl, baseCapital, referenceCapital, dailyReturn: Number.isFinite(dayReturn) ? dayReturn : 0, returnValue: Number.isFinite(dayReturn) ? dayReturn : 0, cumulativeReturnValue: Number.isFinite(dayReturn) ? dayReturn : 0 }},
+                      ];
+                    }}
+                    const firstBenchmarkClose = benchmarkBaseClose(rawBenchmarkPoints, range, latest, customStart, customEnd, benchmarkPoints);
+                    let benchmarkGrowth = 1;
+                    const benchmarkValues = firstBenchmarkClose > 0
+                      ? benchmarkPoints.map((point, index) => {{
+                          const previousPoint = index > 0 ? benchmarkPoints[index - 1] : null;
+                          const previousClose = Number(previousPoint?.close || 0);
+                          const close = Number(point.close || 0);
+                          const dailyReturn = previousClose > 0 ? ((close / previousClose) - 1) * 100 : 0;
+                          if (index > 0 && Number.isFinite(dailyReturn)) benchmarkGrowth *= 1 + dailyReturn / 100;
+                          const cumulativeReturnValue = (benchmarkGrowth - 1) * 100;
+                          const cumulativeAmountValue = (cumulativeReturnValue / 100) * referenceCapital;
+                          return {{
+                          ...point,
+                          dailyReturn,
+                          returnValue: cumulativeReturnValue,
+                          cumulativeReturnValue,
+                          dailyAmountValue: (dailyReturn / 100) * referenceCapital,
+                          amountValue: cumulativeAmountValue,
+                          cumulativeAmountValue,
+                          baseCapital: referenceCapital,
+                        }};
+                        }})
                       : [];
-                    const excessValues = excessValuesFor(accountValues, benchmarkValues);
-                    const effectiveMode = mode === 'excess' && excessValues.length ? 'excess' : 'compare';
-                    const chartValues = effectiveMode === 'excess' ? excessValues : accountValues;
-                    const comparisonValues = effectiveMode === 'excess' ? [] : benchmarkValues;
-                    const allSeriesPoints = chartValues.concat(comparisonValues);
+                    const accountMetricValues = accountValues.map((point) => ({{ ...point, metricValue: valueForMetric(point, metric) }}));
+                    const benchmarkMetricValues = benchmarkValues.map((point) => ({{ ...point, metricValue: valueForMetric(point, metric) }}));
+                    const allSeriesPoints = accountMetricValues.concat(benchmarkMetricValues)
+                      .filter((point) => Number.isFinite(Number(point.metricValue)));
                     let minSerial = Math.min(...allSeriesPoints.map((point) => Number(point.serial)));
                     let maxSerial = Math.max(...allSeriesPoints.map((point) => Number(point.serial)));
-                    let minValue = Math.min(0, ...allSeriesPoints.map((point) => Number(point.returnValue)));
-                    let maxValue = Math.max(0, ...allSeriesPoints.map((point) => Number(point.returnValue)));
+                    const rawMinValue = Math.min(0, ...allSeriesPoints.map((point) => Number(point.metricValue)));
+                    const rawMaxValue = Math.max(0, ...allSeriesPoints.map((point) => Number(point.metricValue)));
+                    const scale = niceScale(rawMinValue, rawMaxValue, metric);
+                    let minValue = scale.min;
+                    let maxValue = scale.max;
                     if (Math.abs(maxSerial - minSerial) < 1e-9) maxSerial = minSerial + 1;
                     if (Math.abs(maxValue - minValue) < 1e-9) maxValue = minValue + 1;
-                    const valuePadding = Math.max((maxValue - minValue) * 0.08, 0.4);
-                    minValue -= valuePadding;
-                    maxValue += valuePadding;
 
                     const pointX = (serial) => dims.left + ((serial - minSerial) / (maxSerial - minSerial)) * dims.innerWidth;
                     const pointY = (value) => dims.top + ((maxValue - value) / (maxValue - minValue)) * dims.innerHeight;
-                    const positions = chartValues.map((point) => [pointX(Number(point.serial)), pointY(Number(point.returnValue)), Number(point.returnValue)]);
-                    const benchmarkPositions = comparisonValues.map((point) => [pointX(Number(point.serial)), pointY(Number(point.returnValue)), Number(point.returnValue)]);
+                    const positions = accountMetricValues.map((point) => [pointX(Number(point.serial)), pointY(Number(point.metricValue)), Number(point.metricValue)]);
+                    const benchmarkPositions = benchmarkMetricValues.map((point) => [pointX(Number(point.serial)), pointY(Number(point.metricValue)), Number(point.metricValue)]);
                     const linePath = linePathFromPositions(positions);
                     const benchmarkPath = linePathFromPositions(benchmarkPositions);
                     const zeroY = pointY(0);
@@ -557,13 +865,27 @@ def render_curve_script(payload: list[dict[str, object]]) -> str:
                     const last = points[points.length - 1];
                     const firstPos = positions[0];
                     const lastPos = positions[positions.length - 1];
+                    const periodPnl = accountValues[accountValues.length - 1]?.amountValue;
+                    const periodReturn = accountValues[accountValues.length - 1]?.returnValue;
+                    const periodBenchmarkReturn = benchmarkValues.length ? benchmarkValues[benchmarkValues.length - 1]?.returnValue : NaN;
+                    const periodBenchmarkAmount = benchmarkValues.length ? benchmarkValues[benchmarkValues.length - 1]?.amountValue : NaN;
+                    const periodExcessReturn = Number.isFinite(periodReturn) && Number.isFinite(periodBenchmarkReturn)
+                      ? Number(periodReturn) - Number(periodBenchmarkReturn)
+                      : NaN;
+                    const periodExcessAmount = Number.isFinite(periodPnl) && Number.isFinite(periodBenchmarkAmount)
+                      ? Number(periodPnl) - Number(periodBenchmarkAmount)
+                      : NaN;
+                    const drawdown = maxDrawdownFor(accountValues);
                     const areaPath = `${{linePath}} L ${{lastPos[0].toFixed(2)}} ${{zeroY.toFixed(2)}} L ${{firstPos[0].toFixed(2)}} ${{zeroY.toFixed(2)}} Z`;
 
                     const gridLines = card.querySelector('[data-curve-grid-lines]');
+                    const yLabels = card.querySelector('[data-curve-y-labels]');
                     if (gridLines) {{
                       gridLines.innerHTML = '';
-                      for (let index = 0; index < 5; index += 1) {{
-                        const y = dims.top + (dims.innerHeight / 4) * index;
+                      if (yLabels) yLabels.innerHTML = '';
+                      (scale.ticks || []).forEach((tick) => {{
+                        const y = pointY(tick);
+                        if (y < dims.top - 1 || y > dims.top + dims.innerHeight + 1) return;
                         const line = document.createElementNS('http://www.w3.org/2000/svg', 'line');
                         line.setAttribute('class', 'curve-grid-line');
                         line.setAttribute('x1', String(dims.left));
@@ -571,18 +893,81 @@ def render_curve_script(payload: list[dict[str, object]]) -> str:
                         line.setAttribute('y1', y.toFixed(2));
                         line.setAttribute('y2', y.toFixed(2));
                         gridLines.appendChild(line);
-                      }}
+                        if (yLabels) {{
+                          const label = document.createElementNS('http://www.w3.org/2000/svg', 'text');
+                          label.setAttribute('class', 'curve-axis-label curve-y-label');
+                          label.setAttribute('x', String(dims.width - 10));
+                          label.setAttribute('y', (y + 4).toFixed(2));
+                          label.setAttribute('text-anchor', 'end');
+                          label.textContent = axisText(tick, metric);
+                          yLabels.appendChild(label);
+                        }}
+                      }});
                     }}
 
                     const line = card.querySelector('[data-curve-line]');
                     const glow = card.querySelector('[data-curve-line-glow]');
                     const benchmarkLine = card.querySelector('[data-curve-benchmark-line]');
+                    const drawdownBand = card.querySelector('[data-curve-drawdown-band]');
+                    const drawdownLink = card.querySelector('[data-curve-drawdown-link]');
+                    const drawdownLayer = card.querySelector('[data-curve-drawdown-layer]');
+                    const drawdownPeak = card.querySelector('[data-curve-drawdown-peak]');
+                    const drawdownTrough = card.querySelector('[data-curve-drawdown-trough]');
+                    const drawdownCaption = card.querySelector('[data-curve-drawdown-caption]');
                     const area = card.querySelector('[data-curve-area]');
                     const zero = card.querySelector('[data-curve-zero-line]');
                     if (line) line.setAttribute('d', linePath);
                     if (glow) glow.setAttribute('d', linePath);
                     if (benchmarkLine) benchmarkLine.setAttribute('d', benchmarkPath);
                     if (area) area.setAttribute('d', areaPath);
+                    if (drawdown && positions[drawdown.peakIndex] && positions[drawdown.troughIndex]) {{
+                      const peakPos = positions[drawdown.peakIndex];
+                      const troughPos = positions[drawdown.troughIndex];
+                      const startX = Math.min(peakPos[0], troughPos[0]);
+                      const endX = Math.max(peakPos[0], troughPos[0]);
+                      if (drawdownBand) {{
+                        drawdownBand.setAttribute('x', startX.toFixed(2));
+                        drawdownBand.setAttribute('y', String(dims.top));
+                        drawdownBand.setAttribute('width', Math.max(2, endX - startX).toFixed(2));
+                        drawdownBand.setAttribute('height', String(dims.innerHeight));
+                      }}
+                      if (drawdownLink) {{
+                        drawdownLink.setAttribute(
+                          'd',
+                          `M ${{peakPos[0].toFixed(2)}} ${{peakPos[1].toFixed(2)}} L ${{troughPos[0].toFixed(2)}} ${{troughPos[1].toFixed(2)}}`
+                        );
+                      }}
+                      if (drawdownPeak) {{
+                        drawdownPeak.setAttribute('cx', peakPos[0].toFixed(2));
+                        drawdownPeak.setAttribute('cy', peakPos[1].toFixed(2));
+                        drawdownPeak.setAttribute('r', '3.8');
+                      }}
+                      if (drawdownTrough) {{
+                        drawdownTrough.setAttribute('cx', troughPos[0].toFixed(2));
+                        drawdownTrough.setAttribute('cy', troughPos[1].toFixed(2));
+                        drawdownTrough.setAttribute('r', '3.8');
+                      }}
+                      if (drawdownCaption) {{
+                        const recoveryText = drawdown.recovery
+                          ? `已修复 ${{daysText(drawdown.recoveryDays)}}`
+                          : '尚未修复';
+                        drawdownCaption.innerHTML = `
+                          <span><em>最大回撤</em><strong>${{percentText(drawdown.rate)}}</strong></span>
+                          <span><em>回撤金额</em><strong>${{signedMoneyText(drawdown.amount)}}</strong></span>
+                          <span><em>回撤区间</em><strong>${{drawdown.peak.date}} 至 ${{drawdown.trough.date}} · ${{daysText(drawdown.durationDays)}}</strong></span>
+                          <span><em>修复情况</em><strong>${{recoveryText}}</strong></span>
+                        `;
+                        drawdownCaption.hidden = false;
+                      }}
+                      setSvgHidden(drawdownBand, false);
+                      setSvgHidden(drawdownLink, false);
+                      setSvgHidden(drawdownLayer, false);
+                    }} else {{
+                      setSvgHidden(drawdownBand, true);
+                      setSvgHidden(drawdownLink, true);
+                      setSvgHidden(drawdownLayer, true);
+                      if (drawdownCaption) drawdownCaption.hidden = true;
+                    }}
                     if (zero) {{
                       zero.setAttribute('x1', String(dims.left));
                       zero.setAttribute('x2', String(dims.width - dims.right));
@@ -612,41 +997,76 @@ def render_curve_script(payload: list[dict[str, object]]) -> str:
                       }}
                     }}
 
+                    const hoverLayer = card.querySelector('[data-curve-hover-layer]');
+                    const hoverLine = card.querySelector('[data-curve-hover-line]');
+                    const hoverDotMe = card.querySelector('[data-curve-hover-dot-me]');
+                    const hoverDotBase = card.querySelector('[data-curve-hover-dot-base]');
+                    const hoverPoints = accountMetricValues.map((point, index) => {{
+                      const position = positions[index];
+                      const benchmarkPoint = pointAtOrBeforeSerial(benchmarkMetricValues, Number(point.serial));
+                      const benchmarkMetric = benchmarkPoint ? valueForMetric(benchmarkPoint, metric) : NaN;
+                      const benchmark = benchmarkPoint && Number.isFinite(benchmarkMetric)
+                        ? {{
+                            value: benchmarkMetric,
+                            x: pointX(Number(benchmarkPoint.serial)),
+                            y: pointY(benchmarkMetric),
+                            dailyReturn: Number(benchmarkPoint.dailyReturn || 0),
+                            dailyAmountValue: Number(benchmarkPoint.dailyAmountValue || 0),
+                          }}
+                        : null;
+                      return {{
+                        date: point.date,
+                        x: position[0],
+                        y: position[1],
+                        accountValue: Number(point.metricValue),
+                        accountDailyReturn: Number(point.dailyReturn || 0),
+                        accountDailyAmount: Number(point.dailyAmountValue || 0),
+                        benchmark,
+                      }};
+                    }}).filter((point) => Number.isFinite(point.x) && Number.isFinite(point.y));
+                    card._curveHoverState = {{
+                      metric,
+                      benchmarkLabel: series.benchmark?.label || '上证指数',
+                      points: hoverPoints,
+                      hoverLayer,
+                      hoverLine,
+                      hoverDotMe,
+                      hoverDotBase,
+                    }};
+                    installHoverHandlers(card);
+                    setSvgHidden(hoverLayer, true);
+
                     const subtitle = card.querySelector('[data-curve-subtitle]');
                     const badge = card.querySelector('[data-curve-badge]');
                     const startLabel = card.querySelector('[data-curve-start-label]');
                     const endLabel = card.querySelector('[data-curve-end-label]');
-                    const maxLabel = card.querySelector('[data-curve-max-label]');
-                    const minLabel = card.querySelector('[data-curve-min-label]');
                     const endValue = card.querySelector('[data-curve-end-value]');
                     if (subtitle) subtitle.textContent = `${{first.date}} 至 ${{last.date}}`;
                     if (badge) {{
-                      badge.className = classForValue(positions[positions.length - 1]?.[2]);
-                      badge.textContent = effectiveMode === 'excess'
-                        ? `超额收益 · ${{percentText(positions[positions.length - 1]?.[2])}}`
-                        : `${{series.currency}} ${{moneyText(Number(last.value))}} · ${{percentText(positions[positions.length - 1]?.[2])}}`;
+                      const badgeValue = metric === 'amount' ? periodPnl : periodReturn;
+                      const badgeLabel = metric === 'amount' ? rangePnlLabel(range) : rangeRateLabel(range);
+                      badge.className = classForValue(badgeValue);
+                      badge.textContent = `${{badgeLabel}} ${{metricText(badgeValue, metric)}}`;
                     }}
                     if (startLabel) startLabel.textContent = first.date;
                     if (endLabel) endLabel.textContent = last.date;
-                    if (maxLabel) maxLabel.textContent = percentText(maxValue);
-                    if (minLabel) minLabel.textContent = percentText(minValue);
                     if (endValue) {{
-                      endValue.textContent = percentText(lastPos[2]);
-                      endValue.setAttribute('x', String(Math.min(lastPos[0] + 10, 574)));
-                      endValue.setAttribute('y', String(Math.max(18, Math.min(182, lastPos[1] - 8))));
+                      endValue.textContent = '';
+                      endValue.setAttribute('x', String(Math.min(lastPos[0] + 10, 568)));
+                      endValue.setAttribute('y', String(Math.max(20, Math.min(214, lastPos[1] - 8))));
                     }}
-                    const accountReturn = positions[positions.length - 1]?.[2];
-                    const compareAccountReturn = accountValues[accountValues.length - 1]?.returnValue;
-                    const benchmarkReturn = benchmarkValues.length ? benchmarkValues[benchmarkValues.length - 1]?.returnValue : NaN;
-                    const excessReturn = Number.isFinite(compareAccountReturn) && Number.isFinite(benchmarkReturn)
-                      ? Number(compareAccountReturn) - Number(benchmarkReturn)
-                      : NaN;
-                    card.classList.toggle('is-excess-mode', effectiveMode === 'excess');
-                    card.dataset.curveMode = effectiveMode;
-                    card.dataset.accountReturn = Number.isFinite(compareAccountReturn) ? String(compareAccountReturn) : '';
-                    card.dataset.benchmarkReturn = Number.isFinite(benchmarkReturn) ? String(benchmarkReturn) : '';
-                    card.dataset.excessReturn = Number.isFinite(excessReturn) ? String(excessReturn) : '';
+                    card.dataset.curveMetric = metric;
+                    card.dataset.accountReturn = Number.isFinite(periodReturn) ? String(periodReturn) : '';
+                    card.dataset.benchmarkReturn = Number.isFinite(periodBenchmarkReturn) ? String(periodBenchmarkReturn) : '';
+                    card.dataset.excessReturn = Number.isFinite(periodExcessReturn) ? String(periodExcessReturn) : '';
+                    card.dataset.accountAmount = Number.isFinite(periodPnl) ? String(periodPnl) : '';
+                    card.dataset.benchmarkAmount = Number.isFinite(periodBenchmarkAmount) ? String(periodBenchmarkAmount) : '';
+                    card.dataset.excessAmount = Number.isFinite(periodExcessAmount) ? String(periodExcessAmount) : '';
                     card.dataset.benchmarkLabel = series.benchmark?.label || '市场基准';
+                    card.dataset.periodPnl = Number.isFinite(periodPnl) ? String(periodPnl) : '';
+                    card.dataset.periodReturn = Number.isFinite(periodReturn) ? String(periodReturn) : '';
+                    card.dataset.periodLabel = rangePnlLabel(range);
+                    card.dataset.periodRateLabel = rangeRateLabel(range);
                   }}
 
                   function updateSummaryBar(row, value, scale) {{
@@ -658,50 +1078,112 @@ def render_curve_script(payload: list[dict[str, object]]) -> str:
                     row.classList.toggle('is-negative', Number.isFinite(value) && value < 0);
                   }}
 
-                  function updateCurveSummary() {{
+                  function updateCurveSummary(metric) {{
                     const primaryCard = root.querySelector('[data-return-curve-card]');
                     if (!primaryCard) return;
-                    const accountReturn = Number(primaryCard.dataset.accountReturn || 'NaN');
-                    const benchmarkReturn = Number(primaryCard.dataset.benchmarkReturn || 'NaN');
+                    const metricMode = metric === 'amount' ? 'amount' : 'return';
+                    const accountValue = Number(primaryCard.dataset[metricMode === 'amount' ? 'accountAmount' : 'accountReturn'] || 'NaN');
+                    const benchmarkValue = Number(primaryCard.dataset[metricMode === 'amount' ? 'benchmarkAmount' : 'benchmarkReturn'] || 'NaN');
+                    const diff = Number(primaryCard.dataset[metricMode === 'amount' ? 'excessAmount' : 'excessReturn'] || 'NaN');
                     const benchmarkLabel = primaryCard.dataset.benchmarkLabel || '市场基准';
-                    const diff = Number.isFinite(accountReturn) && Number.isFinite(benchmarkReturn)
-                      ? accountReturn - benchmarkReturn
-                      : NaN;
                     const title = root.querySelector('[data-curve-summary-title]');
                     const value = root.querySelector('[data-curve-summary-value]');
                     const mine = root.querySelector('[data-curve-summary-mine]');
                     const benchmark = root.querySelector('[data-curve-summary-benchmark]');
                     const benchmarkName = root.querySelector('[data-curve-summary-benchmark-name]');
                     const summary = root.querySelector('[data-curve-summary-title]')?.closest('.ths-curve-summary');
-                    const barScale = Math.max(Math.abs(accountReturn || 0), Math.abs(benchmarkReturn || 0), 1);
-                    if (summary) summary.classList.toggle('is-empty', !Number.isFinite(benchmarkReturn));
+                    const barScale = Math.max(Math.abs(accountValue || 0), Math.abs(benchmarkValue || 0), 1);
+                    if (summary) summary.classList.toggle('is-empty', !Number.isFinite(benchmarkValue));
                     if (title) title.textContent = Number.isFinite(diff) ? `${{diff >= 0 ? '跑赢' : '跑输'}}${{benchmarkLabel}}` : `${{benchmarkLabel}}暂无数据`;
                     if (value) {{
                       value.classList.remove('value-positive', 'value-negative', 'value-zero');
                       value.classList.add(diff > 0 ? 'value-positive' : diff < 0 ? 'value-negative' : 'value-zero');
-                      value.textContent = Number.isFinite(diff) ? percentText(diff) : '--';
+                      value.textContent = metricText(diff, metricMode);
                     }}
-                    if (mine) mine.textContent = percentText(accountReturn);
-                    if (benchmark) benchmark.textContent = percentText(benchmarkReturn);
+                    if (mine) mine.textContent = metricText(accountValue, metricMode);
+                    if (benchmark) benchmark.textContent = metricText(benchmarkValue, metricMode);
                     if (benchmarkName) benchmarkName.textContent = `${{benchmarkLabel}}:`;
-                    updateSummaryBar(mine?.closest('div'), accountReturn, barScale);
-                    updateSummaryBar(benchmark?.closest('div'), benchmarkReturn, barScale);
+                    updateSummaryBar(mine?.closest('div'), accountValue, barScale);
+                    updateSummaryBar(benchmark?.closest('div'), benchmarkValue, barScale);
+                  }}
+
+                  function setToneClass(node, value, baseClass) {{
+                    if (!node) return;
+                    node.className = baseClass;
+                    node.classList.add(value > 0 ? 'value-positive' : value < 0 ? 'value-negative' : 'value-zero');
+                  }}
+
+                  function captureCurveHeroDefaults() {{
+                    const nodes = [
+                      root.querySelector('[data-curve-hero-kicker]'),
+                      root.querySelector('[data-curve-hero-value]'),
+                      root.querySelector('[data-curve-hero-rate]'),
+                      root.querySelector('[data-curve-hero-rate-label]'),
+                    ].filter(Boolean);
+                    nodes.forEach((node) => {{
+                      if (!node.dataset.defaultText) node.dataset.defaultText = node.textContent || '';
+                      if (!node.dataset.defaultClass) node.dataset.defaultClass = node.className || '';
+                    }});
+                  }}
+
+                  function updateCurveHero(range, metric) {{
+                    metric = metric === 'amount' ? 'amount' : 'return';
+                    const primaryCard = root.querySelector('[data-return-curve-card]');
+                    if (!primaryCard) return;
+                    const kicker = root.querySelector('[data-curve-hero-kicker]');
+                    const value = root.querySelector('[data-curve-hero-value]');
+                    const rate = root.querySelector('[data-curve-hero-rate]');
+                    const rateLabel = root.querySelector('[data-curve-hero-rate-label]');
+                    const badge = primaryCard.querySelector('[data-curve-badge]');
+                    captureCurveHeroDefaults();
+                    const periodPnl = Number(primaryCard.dataset.periodPnl || 'NaN');
+                    const periodReturn = Number(primaryCard.dataset.periodReturn || 'NaN');
+                    if (range === 'all') {{
+                      if (kicker) {{
+                        kicker.textContent = kicker.dataset.defaultText || '全部盈亏';
+                        kicker.className = kicker.dataset.defaultClass || 'ths-curve-kicker';
+                      }}
+                      if (value) {{
+                        value.textContent = value.dataset.defaultText || '--';
+                        value.className = value.dataset.defaultClass || 'ths-curve-value';
+                      }}
+                      if (rate) {{
+                        rate.textContent = rate.dataset.defaultText || '--';
+                        rate.className = rate.dataset.defaultClass || '';
+                      }}
+                      if (rateLabel) {{
+                        rateLabel.textContent = rateLabel.dataset.defaultText || '净资产收益率';
+                        rateLabel.className = rateLabel.dataset.defaultClass || '';
+                      }}
+                      return;
+                    }}
+                    if (kicker) kicker.textContent = primaryCard.dataset.periodLabel || '区间盈亏';
+                    if (value) {{
+                      setToneClass(value, periodPnl, 'ths-curve-value');
+                      value.textContent = signedMoneyText(periodPnl);
+                    }}
+                    if (rate) {{
+                      setToneClass(rate, periodReturn, '');
+                      rate.textContent = percentText(periodReturn);
+                    }}
+                    if (rateLabel) rateLabel.textContent = primaryCard.dataset.periodRateLabel || '区间收益率';
                   }}
 
                   function redraw() {{
                     const active = root.querySelector('.ths-curve-tab.is-active');
                     const range = active ? active.dataset.curveRange : 'all';
-                    const activeMode = root.querySelector('.ths-curve-mode.is-active');
-                    const mode = activeMode ? activeMode.dataset.curveMode : 'compare';
+                    const activeMetric = root.querySelector('.ths-curve-metric.is-active');
+                    const metric = activeMetric?.dataset.curveMetric === 'amount' ? 'amount' : 'return';
                     const latest = latestIso();
                     const customStart = root.querySelector('[data-curve-custom-start]')?.value || '';
                     const customEnd = root.querySelector('[data-curve-custom-end]')?.value || '';
                     root.querySelectorAll('[data-return-curve-card]').forEach((card) => {{
                       const index = Number(card.dataset.seriesIndex || '0');
                       const series = seriesList[index];
-                      if (series) drawCard(card, series, range, latest, customStart, customEnd, mode);
+                      if (series) drawCard(card, series, range, latest, customStart, customEnd, metric);
                     }});
-                    updateCurveSummary();
+                    updateCurveHero(range, metric);
+                    updateCurveSummary(metric);
                     const custom = root.querySelector('[data-curve-custom]');
                     if (custom) custom.hidden = range !== 'custom';
                   }}
@@ -713,9 +1195,9 @@ def render_curve_script(payload: list[dict[str, object]]) -> str:
                       redraw();
                     }});
                   }});
-                  root.querySelectorAll('.ths-curve-mode').forEach((button) => {{
+                  root.querySelectorAll('.ths-curve-metric').forEach((button) => {{
                     button.addEventListener('click', () => {{
-                      root.querySelectorAll('.ths-curve-mode').forEach((item) => item.classList.remove('is-active'));
+                      root.querySelectorAll('.ths-curve-metric').forEach((item) => item.classList.remove('is-active'));
                       button.classList.add('is-active');
                       redraw();
                     }});

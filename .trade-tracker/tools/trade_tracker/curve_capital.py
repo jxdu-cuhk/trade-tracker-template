@@ -70,6 +70,8 @@ def attach_dynamic_curve_capital(core, rows: list[tuple[int, dict[int, object]]]
     for series in data.get("curve_series", []) or []:
         if not isinstance(series, dict):
             continue
+        if clean_text(series.get("source")) == "history":
+            continue
         currency = clean_text(series.get("currency"))
         lots = lots_by_currency.get(currency) or []
         if not lots:
