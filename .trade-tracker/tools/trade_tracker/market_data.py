@@ -1,14 +1,17 @@
 from __future__ import annotations
 
+from datetime import datetime, timezone
+from http.cookiejar import CookieJar
 import json
 import re
 import time
 from concurrent.futures import Future, ThreadPoolExecutor, as_completed
+from threading import Lock
 from urllib.error import URLError
 from urllib.parse import urlencode
-from urllib.request import Request, urlopen
+from urllib.request import HTTPCookieProcessor, Request, build_opener, urlopen
 
-from .runtime import emit_progress
+from .runtime import SCRIPT_DIR, emit_progress
 from .settings import FX_RATE_FALLBACKS_TO_CNY, FX_RATE_SECIDS_TO_CNY, FX_RATE_TENCENT_SYMBOLS_TO_CNY, FX_RATE_YAHOO_SYMBOLS_TO_CNY
 from .utils import clean_name, clean_text, parse_float
 
@@ -19,11 +22,19 @@ MARKET_HTTP_TIMEOUT = 3
 EASTMONEY_HTTP_TIMEOUT = 2
 HKEX_HTTP_TIMEOUT = 3
 HKEX_REQUEST_RETRIES = 2
+US_OPTION_HTTP_TIMEOUT = 3
+US_OPTION_CACHE_TTL_SECONDS = 15 * 60
 MARKET_BATCH_SIZE = 80
 YAHOO_BATCH_SIZE = 50
 EASTMONEY_BATCH_FIELDS = "f12,f13,f14,f2,f1,f18"
 EASTMONEY_SINGLE_FIELDS = "f57,f58,f43,f59,f60"
 _HKEX_OPTION_ID_CACHE: dict[tuple[str, str, str, str], str | None] = {}
+_US_OPTION_CHAIN_CACHE: dict[tuple[str, str], dict[tuple[str, str], dict]] = {}
+_US_OPTION_CHAIN_FUTURES: dict[tuple[str, str], Future] = {}
+_US_OPTION_CHAIN_LOCK = Lock()
+_YAHOO_OPTION_OPENER = None
+_YAHOO_OPTION_CRUMB: str | None = None
+US_OPTION_CHAIN_CACHE_PATH = SCRIPT_DIR / "cache" / "us_option_chains.json"
 
 
 def chunks(items, size: int = MARKET_BATCH_SIZE):
@@ -294,6 +305,338 @@ def format_option_strike(strike) -> str:
     return f"{strike_value:.8f}".rstrip("0").rstrip(".")
 
 
+def us_option_expiry_iso(expiry: str) -> str:
+    return normalize_option_expiry(str(expiry or ""))
+
+
+def us_option_expiry_timestamp(expiry: str) -> int | None:
+    expiry_iso = us_option_expiry_iso(expiry)
+    try:
+        expiry_date = datetime.strptime(expiry_iso, "%Y-%m-%d").replace(tzinfo=timezone.utc)
+    except ValueError:
+        return None
+    return int(expiry_date.timestamp())
+
+
+def us_option_cache_key(core, ticker, expiry) -> tuple[str, str] | None:
+    normalized_ticker = clean_text(core.normalize_ticker(ticker, "USD")).upper()
+    expiry_iso = us_option_expiry_iso(str(expiry or ""))
+    if not normalized_ticker or not expiry_iso:
+        return None
+    return normalized_ticker, expiry_iso
+
+
+def us_occ_option_symbol(ticker: str, expiry_iso: str, kind: str, strike: object) -> str:
+    strike_value = parse_float(strike)
+    if strike_value is None:
+        return ""
+    try:
+        expiry_date = datetime.strptime(expiry_iso, "%Y-%m-%d")
+    except ValueError:
+        return ""
+    side = "C" if kind == "CALL" else "P"
+    strike_code = int(round(float(strike_value) * 1000))
+    return f"{ticker.upper()}{expiry_date:%y%m%d}{side}{strike_code:08d}"
+
+
+def option_mark_price(bid, ask, last) -> float | None:
+    bid_price = parse_float(bid)
+    ask_price = parse_float(ask)
+    last_price = parse_float(last)
+    if bid_price is not None and ask_price is not None and bid_price >= 0 and ask_price > 0:
+        return (float(bid_price) + float(ask_price)) / 2
+    if last_price is not None and last_price >= 0:
+        return float(last_price)
+    if bid_price is not None and bid_price >= 0:
+        return float(bid_price)
+    if ask_price is not None and ask_price >= 0:
+        return float(ask_price)
+    return None
+
+
+def yahoo_us_option_quote_from_contract(ticker: str, contract: dict) -> dict | None:
+    if not isinstance(contract, dict):
+        return None
+    price = option_mark_price(contract.get("bid"), contract.get("ask"), contract.get("lastPrice"))
+    if price is None:
+        return None
+    as_of = ""
+    last_trade = contract.get("lastTradeDate")
+    if isinstance(last_trade, (int, float)) and last_trade > 0:
+        as_of = datetime.fromtimestamp(float(last_trade), timezone.utc).strftime("%Y-%m-%d %H:%M UTC")
+    return {
+        "option_code": clean_text(contract.get("contractSymbol")) or "",
+        "last_price": float(price),
+        "source": "Yahoo option chain",
+        "as_of": as_of,
+    }
+
+
+def parse_yahoo_us_option_chain(ticker: str, payload: dict) -> dict[tuple[str, str], dict]:
+    chain: dict[tuple[str, str], dict] = {}
+    try:
+        result = payload["optionChain"]["result"][0]
+    except (KeyError, IndexError, TypeError):
+        return chain
+    options = result.get("options") if isinstance(result, dict) else None
+    if not isinstance(options, list):
+        return chain
+    for option_group in options:
+        if not isinstance(option_group, dict):
+            continue
+        for field, kind in (("calls", "CALL"), ("puts", "PUT")):
+            contracts = option_group.get(field)
+            if not isinstance(contracts, list):
+                continue
+            for contract in contracts:
+                if not isinstance(contract, dict):
+                    continue
+                strike = format_option_strike(contract.get("strike"))
+                if not strike:
+                    continue
+                quote = yahoo_us_option_quote_from_contract(ticker, contract)
+                if quote_has_price(quote):
+                    chain[(kind, strike)] = quote
+    return chain
+
+
+def yahoo_option_opener_and_crumb():
+    global _YAHOO_OPTION_CRUMB, _YAHOO_OPTION_OPENER
+    if _YAHOO_OPTION_OPENER is not None and _YAHOO_OPTION_CRUMB:
+        return _YAHOO_OPTION_OPENER, _YAHOO_OPTION_CRUMB
+    opener = build_opener(HTTPCookieProcessor(CookieJar()))
+    headers = {"User-Agent": "Mozilla/5.0"}
+    try:
+        opener.open(Request("https://fc.yahoo.com", headers=headers), timeout=US_OPTION_HTTP_TIMEOUT).read()
+    except (TimeoutError, URLError, OSError, ValueError):
+        pass
+    try:
+        crumb = opener.open(
+            Request("https://query1.finance.yahoo.com/v1/test/getcrumb", headers=headers),
+            timeout=US_OPTION_HTTP_TIMEOUT,
+        ).read().decode("utf-8", "ignore").strip()
+    except (TimeoutError, URLError, OSError, ValueError):
+        return None, ""
+    if not crumb:
+        return None, ""
+    _YAHOO_OPTION_OPENER = opener
+    _YAHOO_OPTION_CRUMB = crumb
+    return opener, crumb
+
+
+def fetch_yahoo_us_option_chain(core, ticker, expiry) -> dict[tuple[str, str], dict]:
+    cache_key = us_option_cache_key(core, ticker, expiry)
+    if cache_key is None:
+        return {}
+    normalized_ticker, _expiry_iso = cache_key
+    expiry_timestamp = us_option_expiry_timestamp(expiry)
+    if expiry_timestamp is None:
+        return {}
+    opener, crumb = yahoo_option_opener_and_crumb()
+    if opener is None or not crumb:
+        return {}
+    url = "https://query1.finance.yahoo.com/v7/finance/options/" + normalized_ticker + "?" + urlencode(
+        {"date": expiry_timestamp, "crumb": crumb}
+    )
+    try:
+        with opener.open(Request(url, headers={"User-Agent": "Mozilla/5.0"}), timeout=US_OPTION_HTTP_TIMEOUT) as response:
+            payload = json.loads(response.read().decode("utf-8", "ignore"))
+    except (TimeoutError, URLError, OSError, ValueError):
+        return {}
+    return parse_yahoo_us_option_chain(normalized_ticker, payload)
+
+
+def nasdaq_us_option_quote_from_row(ticker: str, expiry_iso: str, kind: str, row: dict) -> dict | None:
+    prefix = "c" if kind == "CALL" else "p"
+    price = option_mark_price(row.get(f"{prefix}_Bid"), row.get(f"{prefix}_Ask"), row.get(f"{prefix}_Last"))
+    if price is None:
+        return None
+    return {
+        "option_code": us_occ_option_symbol(ticker, expiry_iso, kind, row.get("strike")),
+        "last_price": float(price),
+        "source": "Nasdaq option chain",
+        "as_of": clean_text(row.get("expiryDate")),
+    }
+
+
+def parse_nasdaq_us_option_chain(ticker: str, expiry_iso: str, payload: dict) -> dict[tuple[str, str], dict]:
+    chain: dict[tuple[str, str], dict] = {}
+    try:
+        rows = payload["data"]["table"]["rows"]
+    except (KeyError, TypeError):
+        return chain
+    if not isinstance(rows, list):
+        return chain
+    for row in rows:
+        if not isinstance(row, dict):
+            continue
+        strike = format_option_strike(row.get("strike"))
+        if not strike:
+            continue
+        for kind in ("CALL", "PUT"):
+            quote = nasdaq_us_option_quote_from_row(ticker, expiry_iso, kind, row)
+            if quote_has_price(quote):
+                chain[(kind, strike)] = quote
+    return chain
+
+
+def fetch_nasdaq_us_option_chain(core, ticker, expiry) -> dict[tuple[str, str], dict]:
+    cache_key = us_option_cache_key(core, ticker, expiry)
+    if cache_key is None:
+        return {}
+    normalized_ticker, expiry_iso = cache_key
+    headers = {
+        "User-Agent": "Mozilla/5.0",
+        "Accept": "application/json, text/plain, */*",
+        "Origin": "https://www.nasdaq.com",
+        "Referer": "https://www.nasdaq.com/",
+    }
+    for asset_class in ("etf", "stocks"):
+        url = "https://api.nasdaq.com/api/quote/" + normalized_ticker + "/option-chain?" + urlencode(
+            {
+                "assetclass": asset_class,
+                "fromdate": expiry_iso,
+                "todate": expiry_iso,
+                "limit": 10000,
+            }
+        )
+        try:
+            with urlopen(Request(url, headers=headers), timeout=US_OPTION_HTTP_TIMEOUT) as response:
+                payload = json.loads(response.read().decode("utf-8", "ignore"))
+        except (TimeoutError, URLError, OSError, ValueError):
+            continue
+        chain = parse_nasdaq_us_option_chain(normalized_ticker, expiry_iso, payload)
+        if chain:
+            return chain
+    return {}
+
+
+def encode_us_option_chain(chain: dict[tuple[str, str], dict]) -> list[dict]:
+    rows = []
+    for (kind, strike), quote in chain.items():
+        if not quote_has_price(quote):
+            continue
+        row = {"kind": kind, "strike": strike}
+        row.update(quote)
+        rows.append(row)
+    return rows
+
+
+def decode_us_option_chain(rows: object) -> dict[tuple[str, str], dict]:
+    chain: dict[tuple[str, str], dict] = {}
+    if not isinstance(rows, list):
+        return chain
+    for row in rows:
+        if not isinstance(row, dict):
+            continue
+        kind = clean_text(row.get("kind"))
+        strike = clean_text(row.get("strike"))
+        price = parse_float(row.get("last_price"))
+        if kind not in {"CALL", "PUT"} or not strike or price is None:
+            continue
+        quote = {
+            "option_code": clean_text(row.get("option_code")),
+            "last_price": float(price),
+            "source": clean_text(row.get("source")) or "Cached option chain",
+            "as_of": clean_text(row.get("as_of")),
+        }
+        chain[(kind, strike)] = quote
+    return chain
+
+
+def load_us_option_chain_cache_file() -> dict:
+    try:
+        with US_OPTION_CHAIN_CACHE_PATH.open("r", encoding="utf-8") as handle:
+            payload = json.load(handle)
+    except (OSError, ValueError):
+        return {"chains": {}}
+    if not isinstance(payload, dict):
+        return {"chains": {}}
+    chains = payload.get("chains")
+    if not isinstance(chains, dict):
+        payload["chains"] = {}
+    return payload
+
+
+def read_us_option_chain_file_cache(key: tuple[str, str]) -> dict[tuple[str, str], dict]:
+    payload = load_us_option_chain_cache_file()
+    entry = (payload.get("chains") or {}).get("|".join(key))
+    if not isinstance(entry, dict):
+        return {}
+    fetched_at = parse_float(entry.get("fetched_at"))
+    if fetched_at is None or time.time() - float(fetched_at) > US_OPTION_CACHE_TTL_SECONDS:
+        return {}
+    return decode_us_option_chain(entry.get("quotes"))
+
+
+def write_us_option_chain_file_cache(key: tuple[str, str], chain: dict[tuple[str, str], dict]) -> None:
+    if not chain:
+        return
+    payload = load_us_option_chain_cache_file()
+    chains = payload.setdefault("chains", {})
+    if not isinstance(chains, dict):
+        chains = {}
+        payload["chains"] = chains
+    chains["|".join(key)] = {
+        "fetched_at": time.time(),
+        "quotes": encode_us_option_chain(chain),
+    }
+    try:
+        US_OPTION_CHAIN_CACHE_PATH.parent.mkdir(parents=True, exist_ok=True)
+        US_OPTION_CHAIN_CACHE_PATH.write_text(json.dumps(payload, ensure_ascii=False, separators=(",", ":")), encoding="utf-8")
+    except OSError:
+        return
+
+
+def fetch_us_option_chain_uncached(core, ticker, expiry) -> dict[tuple[str, str], dict]:
+    cache_key = us_option_cache_key(core, ticker, expiry)
+    if cache_key is None:
+        return {}
+    cached = read_us_option_chain_file_cache(cache_key)
+    if cached:
+        return cached
+    chain = fetch_yahoo_us_option_chain(core, ticker, expiry)
+    if not chain:
+        chain = fetch_nasdaq_us_option_chain(core, ticker, expiry)
+    if chain:
+        write_us_option_chain_file_cache(cache_key, chain)
+    return chain
+
+
+def fetch_us_option_chain(core, ticker, expiry) -> dict[tuple[str, str], dict]:
+    cache_key = us_option_cache_key(core, ticker, expiry)
+    if cache_key is None:
+        return {}
+    with _US_OPTION_CHAIN_LOCK:
+        cached = _US_OPTION_CHAIN_CACHE.get(cache_key)
+        if cached is not None:
+            return cached
+        future = _US_OPTION_CHAIN_FUTURES.get(cache_key)
+        if future is None:
+            future = market_data_executor().submit(fetch_us_option_chain_uncached, core, ticker, expiry)
+            _US_OPTION_CHAIN_FUTURES[cache_key] = future
+    try:
+        chain = future.result()
+    except Exception:
+        chain = {}
+    with _US_OPTION_CHAIN_LOCK:
+        _US_OPTION_CHAIN_CACHE[cache_key] = chain
+        if _US_OPTION_CHAIN_FUTURES.get(cache_key) is future:
+            _US_OPTION_CHAIN_FUTURES.pop(cache_key, None)
+    return chain
+
+
+def fetch_us_option_quote(core, ticker, currency, event, expiry, strike) -> dict | None:
+    if core.normalize_currency(currency) != "USD":
+        return None
+    option_kind = option_kind_for_event(event)
+    if option_kind not in {"CALL", "PUT"}:
+        return None
+    chain = fetch_us_option_chain(core, ticker, expiry)
+    quote = chain.get((option_kind, format_option_strike(strike)))
+    return quote if quote_has_price(quote) else None
+
+
 def strip_hkex_hanweb_header(text: str) -> str:
     marker = "<!--SORC_HACK_HANWEB_END-->"
     if marker in text:
@@ -462,7 +805,12 @@ def fetch_hkex_option_quote(core, ticker, currency, event, expiry, strike) -> di
 
 
 def fetch_option_quote(core, ticker, currency, event, expiry, strike) -> dict | None:
-    return fetch_hkex_option_quote(core, ticker, currency, event, expiry, strike)
+    normalized_currency = core.normalize_currency(currency)
+    if normalized_currency == "HKD":
+        return fetch_hkex_option_quote(core, ticker, currency, event, expiry, strike)
+    if normalized_currency == "USD":
+        return fetch_us_option_quote(core, ticker, currency, event, expiry, strike)
+    return None
 
 
 def infer_secid(core, ticker, currency) -> str | None:

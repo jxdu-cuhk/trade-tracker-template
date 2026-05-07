@@ -17,8 +17,10 @@ from trade_tracker.analytics import build_holding_days_map
 from trade_tracker.market_data import (
     eastmoney_quote_from_row,
     fetch_option_quote,
+    fetch_us_option_quote,
     fetch_tencent_fx_rates_to_cny,
     fetch_yahoo_fx_rates_to_cny,
+    parse_yahoo_us_option_chain,
     parse_hkex_option_detail,
     tencent_quote_from_payload,
     yahoo_quote_from_result,
@@ -460,6 +462,67 @@ class RealizedCostAdjustmentTests(unittest.TestCase):
         self.assertAlmostEqual(price, 0.37)
         self.assertEqual(as_of, "14:31:00")
 
+    def test_parse_yahoo_us_option_chain_prefers_bid_ask_midpoint(self):
+        payload = {
+            "optionChain": {
+                "result": [
+                    {
+                        "options": [
+                            {
+                                "calls": [
+                                    {
+                                        "contractSymbol": "TQQQ260508C00072000",
+                                        "strike": 72.0,
+                                        "lastPrice": 1.11,
+                                        "bid": 1.03,
+                                        "ask": 1.11,
+                                        "lastTradeDate": 1778097577,
+                                    }
+                                ],
+                                "puts": [
+                                    {
+                                        "contractSymbol": "TQQQ260508P00072000",
+                                        "strike": 72.0,
+                                        "lastPrice": 1.45,
+                                        "bid": 1.4,
+                                        "ask": 1.5,
+                                    }
+                                ],
+                            }
+                        ]
+                    }
+                ]
+            }
+        }
+
+        chain = parse_yahoo_us_option_chain("TQQQ", payload)
+
+        self.assertAlmostEqual(chain[("CALL", "72")]["last_price"], 1.07)
+        self.assertEqual(chain[("CALL", "72")]["option_code"], "TQQQ260508C00072000")
+        self.assertAlmostEqual(chain[("PUT", "72")]["last_price"], 1.45)
+
+    def test_us_option_quote_uses_cached_chain_for_tqqq(self):
+        previous_cache = dict(market_data_module._US_OPTION_CHAIN_CACHE)
+        previous_futures = dict(market_data_module._US_OPTION_CHAIN_FUTURES)
+        market_data_module._US_OPTION_CHAIN_CACHE.clear()
+        market_data_module._US_OPTION_CHAIN_FUTURES.clear()
+        try:
+            with patch(
+                "trade_tracker.market_data.fetch_us_option_chain_uncached",
+                return_value={("CALL", "72"): {"option_code": "TQQQ260508C00072000", "last_price": 1.07}},
+            ) as fetch_chain:
+                first = fetch_us_option_quote(FakeCore(), "TQQQ", "美元", "认购", "2026/05/08", 72)
+                second = fetch_us_option_quote(FakeCore(), "TQQQ", "USD", "call", "2026-05-08", 72.0)
+
+            self.assertEqual(first["last_price"], 1.07)
+            self.assertEqual(second["option_code"], "TQQQ260508C00072000")
+            fetch_chain.assert_called_once()
+        finally:
+            market_data_module._US_OPTION_CHAIN_CACHE.clear()
+            market_data_module._US_OPTION_CHAIN_CACHE.update(previous_cache)
+            market_data_module._US_OPTION_CHAIN_FUTURES.clear()
+            market_data_module._US_OPTION_CHAIN_FUTURES.update(previous_futures)
+
     def test_public_quote_parsers_support_batch_sources(self):
         eastmoney_quote = eastmoney_quote_from_row(
             FakeCore(),
@@ -492,6 +555,13 @@ class RealizedCostAdjustmentTests(unittest.TestCase):
         self.assertEqual(RUNTIME_PACKAGES, ["openpyxl==3.1.5", "pandas==3.0.2"])
         with patch("trade_tracker.market_data.fetch_hkex_option_quote", return_value=None):
             self.assertIsNone(fetch_option_quote(FakeCore(), "DEMO", "港币", "认购", "2026-05-28", 32))
+        with patch(
+            "trade_tracker.market_data.fetch_us_option_quote",
+            return_value={"option_code": "TQQQ260508C00072000", "last_price": 1.07},
+        ) as us_quote:
+            quote = fetch_option_quote(FakeCore(), "TQQQ", "美元", "认购", "2026-05-08", 72)
+        self.assertEqual(quote["last_price"], 1.07)
+        us_quote.assert_called_once()
 
     def test_yahoo_fx_fallback_fetches_missing_rates_together(self):
         def fake_yahoo_rate(symbol):
