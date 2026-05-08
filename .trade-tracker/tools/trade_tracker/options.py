@@ -5,7 +5,7 @@ from datetime import date
 
 from . import state
 from .dividends import build_dividend_income_maps
-from .market_data import display_currency_label, fetch_option_quote
+from .market_data import display_currency_label, fetch_option_quote, option_kind_for_event
 from .runtime import emit_progress
 from .settings import OPTION_EVENTS
 from .utils import cell_raw, clean_text, core_trade_type, excel_serial_to_date, format_currency_amounts, format_money_text, format_signed_percent, format_signed_percent_with_plus, parse_display_number, raw_number, raw_text_value
@@ -369,6 +369,203 @@ def adjust_holding_for_realized_income(row: dict[str, object], realized_income: 
     row["sort_value"] = abs(adjusted_cost)
 
 
+def option_reserved_capital(core, cells: dict[int, object], trade_type: str, event: str) -> float:
+    capital = raw_number(cells, 12)
+    if capital in (None, 0):
+        strike = raw_number(cells, 7)
+        qty = raw_number(cells, 8)
+        multiplier = raw_number(cells, 19) or 1.0
+        if strike is not None and qty not in (None, 0):
+            capital = abs(strike * qty * multiplier)
+    if capital in (None, 0):
+        try:
+            capital = core.row_capital(cells, trade_type, event)
+        except Exception:
+            capital = None
+    return abs(float(capital or 0.0))
+
+
+def open_short_put_exposure_for_row(core, cells: dict[int, object]) -> dict[str, object] | None:
+    event = raw_text_value(core, cells, 6)
+    if event not in OPTION_EVENTS or option_kind_for_event(event) != "PUT":
+        return None
+    trade_type = core_trade_type(raw_text_value(core, cells, 1))
+    if trade_type != "sell":
+        return None
+    is_closed = excel_serial_to_date(cell_raw(cells, 4)) is not None or raw_number(cells, 10) is not None
+    if is_closed:
+        return None
+
+    ticker = core.normalize_ticker(cell_raw(cells, 5), cell_raw(cells, 20))
+    currency_raw = core.normalize_currency(cell_raw(cells, 20))
+    currency_label = display_currency_label(core, currency_raw)
+    if not ticker or not currency_label:
+        return None
+
+    capital = option_reserved_capital(core, cells, trade_type, event)
+    if capital <= 0:
+        return None
+
+    mark = state.OPEN_OPTION_MARKS.get(option_key_from_cells(core, cells), {})
+    float_pnl = parse_display_number(mark.get("float_pnl") if isinstance(mark, dict) else None) or 0.0
+    open_date = excel_serial_to_date(cell_raw(cells, 2))
+    days = max(((date.today() - open_date).days if open_date else 1), 1)
+    return {
+        "ticker": ticker,
+        "currency": currency_label,
+        "currency_raw": currency_raw,
+        "capital": capital,
+        "float_pnl": float_pnl,
+        "capital_days": capital * days,
+        "count": 1,
+        "open_date": open_date,
+    }
+
+
+def build_open_short_put_exposure_maps(core, rows: list[tuple[int, dict[int, object]]]) -> dict[tuple[str, str], dict[str, object]]:
+    exposures: dict[tuple[str, str], dict[str, object]] = {}
+    for _row_number, cells in rows:
+        exposure = open_short_put_exposure_for_row(core, cells)
+        if not exposure:
+            continue
+        key = (str(exposure["ticker"]), str(exposure["currency"]))
+        bucket = exposures.setdefault(
+            key,
+            {
+                "ticker": exposure["ticker"],
+                "currency": exposure["currency"],
+                "currency_raw": exposure["currency_raw"],
+                "capital": 0.0,
+                "float_pnl": 0.0,
+                "capital_days": 0.0,
+                "count": 0,
+                "first_open_date": exposure.get("open_date"),
+            },
+        )
+        bucket["capital"] = float(bucket["capital"]) + float(exposure["capital"])
+        bucket["float_pnl"] = float(bucket["float_pnl"]) + float(exposure["float_pnl"])
+        bucket["capital_days"] = float(bucket["capital_days"]) + float(exposure["capital_days"])
+        bucket["count"] = int(bucket["count"]) + 1
+        open_date = exposure.get("open_date")
+        first_open_date = bucket.get("first_open_date")
+        if open_date and (not first_open_date or open_date < first_open_date):
+            bucket["first_open_date"] = open_date
+    return exposures
+
+
+def append_short_put_side(side: object) -> str:
+    text = clean_text(side)
+    if not text or text == "-":
+        return "卖出认沽"
+    if "卖出认沽" in text:
+        return text
+    return f"{text}+卖出认沽"
+
+
+def merge_open_short_put_exposure_into_holding(core, holding: dict[str, object], exposure: dict[str, object]) -> None:
+    currency_label = clean_text(holding.get("currency") or exposure.get("currency") or "")
+    capital = float(exposure.get("capital") or 0.0)
+    float_pnl = float(exposure.get("float_pnl") or 0.0)
+    market_value = parse_display_number(holding.get("market_value")) or 0.0
+    all_in_cost = parse_display_number(holding.get("all_in_cost")) or 0.0
+    current_float_pnl = parse_display_number(holding.get("float_pnl")) or 0.0
+
+    merged_cost = all_in_cost + capital
+    merged_float_pnl = current_float_pnl + float_pnl
+    merged_market_value = market_value + capital
+
+    holding["market_value"] = format_money_text(currency_label, merged_market_value)
+    holding["all_in_cost"] = format_money_text(currency_label, merged_cost)
+    holding["float_pnl"] = format_money_text(currency_label, merged_float_pnl)
+    if merged_cost:
+        holding["float_pnl_pct"] = format_signed_percent(merged_float_pnl / abs(merged_cost))
+    holding["side"] = append_short_put_side(holding.get("side"))
+    holding["option_reserve"] = format_money_text(currency_label, capital)
+    holding["option_reserve_count"] = int(exposure.get("count") or 0)
+    holding["sort_value"] = abs(merged_market_value)
+
+
+def make_open_short_put_holding(core, exposure: dict[str, object]) -> dict[str, object]:
+    ticker = clean_text(exposure.get("ticker"))
+    currency_label = clean_text(exposure.get("currency"))
+    capital = float(exposure.get("capital") or 0.0)
+    float_pnl = float(exposure.get("float_pnl") or 0.0)
+    count = int(exposure.get("count") or 0)
+    open_date = exposure.get("first_open_date")
+    try:
+        name = clean_text(core.lookup_security_name(ticker, currency_label, False))
+    except Exception:
+        name = ""
+    if not name:
+        try:
+            name = clean_text(core.lookup_security_name(ticker, currency_label, True))
+        except Exception:
+            name = ""
+    current_value = capital
+    return {
+        "ticker": ticker,
+        "name": name or "-",
+        "currency": currency_label,
+        "side": "卖出认沽",
+        "qty": f"{count}腿",
+        "all_in_cost": format_money_text(currency_label, capital),
+        "avg_cost": "-",
+        "market_value": format_money_text(currency_label, current_value),
+        "last_price": "-",
+        "float_pnl": format_money_text(currency_label, float_pnl),
+        "float_pnl_pct": format_signed_percent(float_pnl / capital) if capital else "--",
+        "daily_pnl": format_money_text(currency_label, 0.0),
+        "breakeven": "-",
+        "last_buy": open_date.strftime("%Y/%m/%d") if open_date else "-",
+        "recent_buy": open_date.strftime("%Y/%m/%d") if open_date else "-",
+        "option_reserve": format_money_text(currency_label, capital),
+        "option_reserve_count": count,
+        "sort_value": abs(current_value),
+    }
+
+
+def apply_open_short_put_exposures_to_holdings(core, data: dict[str, object], exposures: dict[tuple[str, str], dict[str, object]]) -> None:
+    if not exposures:
+        return
+    holdings = data.setdefault("holdings", [])
+    holdings_by_key = {
+        (clean_text(holding.get("ticker")), clean_text(holding.get("currency"))): holding
+        for holding in holdings
+        if isinstance(holding, dict)
+    }
+    for key, exposure in exposures.items():
+        holding = holdings_by_key.get(key)
+        if holding:
+            merge_open_short_put_exposure_into_holding(core, holding, exposure)
+        else:
+            first_open_date = exposure.get("first_open_date")
+            if first_open_date:
+                days = max((date.today() - first_open_date).days, 1)
+                state.HOLDING_DAYS_MAP[(str(exposure.get("ticker")), str(exposure.get("currency_raw")))] = str(days)
+            holdings.append(make_open_short_put_holding(core, exposure))
+
+
+def add_open_short_put_capital_to_summaries(data: dict[str, object], exposures: dict[tuple[str, str], dict[str, object]]) -> None:
+    if not exposures:
+        return
+    current_year = str(date.today().year)
+    for summary_key in ("stock_summary", "annual_summary"):
+        for row in data.get(summary_key, []) or []:
+            if summary_key == "annual_summary" and clean_text(row.get("year")) != current_year:
+                continue
+            key = (clean_text(row.get("ticker")), clean_text(row.get("currency")))
+            exposure = exposures.get(key)
+            if not exposure:
+                continue
+            row["capital_raw"] = float(row.get("capital_raw") or 0.0) + float(exposure.get("capital") or 0.0)
+            row["capital_days_raw"] = float(row.get("capital_days_raw") or 0.0) + float(exposure.get("capital_days") or 0.0)
+            total_pnl = float(row.get("total_pnl_raw") or parse_display_number(row.get("total_pnl")) or 0.0)
+            if row["capital_raw"]:
+                row["return_rate"] = format_signed_percent(total_pnl / float(row["capital_raw"]))
+            if row["capital_days_raw"]:
+                row["annualized"] = format_signed_percent(total_pnl * 365.0 / float(row["capital_days_raw"]))
+
+
 def recompute_current_holding_totals(data: dict[str, object]) -> None:
     totals = {
         "market_value_text": {},
@@ -434,9 +631,10 @@ def sync_adjusted_holdings_to_summaries(data: dict[str, object], *, dividend_in_
 def patch_dashboard_data_with_options(core, rows, data: dict[str, object]) -> dict[str, object]:
     state.OPEN_OPTION_MARKS = build_open_option_marks(core, rows)
     option_adjustments = build_option_income_maps(core, rows)
+    short_put_exposures = build_open_short_put_exposure_maps(core, rows)
     stock_adjustments = build_stock_realized_income_maps(core, rows)
     dividend_adjustments = build_dividend_income_maps(data)
-    if not option_adjustments and not stock_adjustments and not dividend_adjustments:
+    if not option_adjustments and not short_put_exposures and not stock_adjustments and not dividend_adjustments:
         return data
 
     for holding in data.get("holdings", []) or []:
@@ -445,10 +643,12 @@ def patch_dashboard_data_with_options(core, rows, data: dict[str, object]) -> di
         stock_income = float(stock_adjustments.get(key, 0.0))
         dividend_income = float(dividend_adjustments.get(key, 0.0))
         adjust_holding_for_realized_income(holding, option_income + stock_income + dividend_income)
+    apply_open_short_put_exposures_to_holdings(core, data, short_put_exposures)
     recompute_current_holding_totals(data)
     sync_adjusted_holdings_to_summaries(data, dividend_in_holding_cost=True)
+    add_open_short_put_capital_to_summaries(data, short_put_exposures)
 
     note = clean_text(data.get("totals_note") or "")
-    option_note = "已平仓/到期作废期权、已完成现股交易和分红净额归入对应标的；当前持仓成本按已实现净收益调低，未平仓期权暂不计入。"
+    option_note = "已平仓/到期作废期权、已完成现股交易和分红净额归入对应标的；当前持仓成本按已实现净收益调低，卖出认沽按占用本金计入当前持仓市值和仓位，covered call 不重复计入。"
     data["totals_note"] = option_note if not note else f"{note}；{option_note}"
     return data

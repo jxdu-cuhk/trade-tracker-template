@@ -10,8 +10,11 @@ from unittest.mock import patch
 TOOLS_DIR = Path(__file__).resolve().parents[1] / "tools"
 sys.path.insert(0, str(TOOLS_DIR))
 
-from trade_tracker.historical_curve import SecurityHistoryPoint
-from trade_tracker.holdings_overview import holdings_metrics_from_table, reference_float_metrics, render_holdings_account_panel
+from trade_tracker.holdings_overview import (
+    holdings_metrics_from_table,
+    reference_float_metrics,
+    render_holdings_account_panel,
+)
 
 
 class FakeCore:

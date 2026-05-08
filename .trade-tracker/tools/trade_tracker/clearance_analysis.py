@@ -434,7 +434,7 @@ def render_cycle_table(cycles: list[ClearanceCycle]) -> str:
             + td("ccy", cycle.currency)
             + "</tr>"
         )
-    empty = "还没有识别到已经从持仓归零的现股清仓周期。"
+    empty = "还没有识别到已经从持仓归零的清仓周期。"
     return '<h3 class="clearance-subtitle">清仓明细</h3>' + render_table(
         headers,
         rows,
@@ -632,7 +632,7 @@ def render_clearance_analysis_section(core, rows: list[tuple[int, dict[int, obje
             <div class="section-head">
               <div>
                 <h2 class="section-title">清仓分析</h2>
-                <p class="section-note">按现股持仓从空仓到再次归零划分清仓周期；月度和年度统计按清仓日归属，币种分开汇总，未清仓持仓不会计入这里。</p>
+                <p class="section-note">按现股持仓从空仓到再次归零划分清仓周期，只统计股票本身的已实现盈亏；期权收益独立放在“期权收益分析”，避免只匹配部分重叠周期导致口径混乱。</p>
               </div>
               <span class="section-toggle" aria-hidden="true"></span>
             </div>

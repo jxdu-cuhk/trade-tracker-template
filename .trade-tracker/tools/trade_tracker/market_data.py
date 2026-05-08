@@ -1283,6 +1283,32 @@ def fetch_yahoo_security_quote(core, ticker, currency) -> dict | None:
         return None
 
 
+def fetch_yahoo_security_name(core, ticker, currency) -> str:
+    key = normalize_quote_key(core, ticker, currency)
+    if key[1] != "USD" or not key[0]:
+        return ""
+    url = "https://query1.finance.yahoo.com/v1/finance/search?" + urlencode(
+        {"q": key[0], "quotesCount": 5, "newsCount": 0}
+    )
+    request = Request(url, headers={"User-Agent": "Mozilla/5.0"})
+    try:
+        with urlopen(request, timeout=MARKET_HTTP_TIMEOUT) as response:
+            payload = json.loads(response.read().decode("utf-8", "ignore"))
+    except (TimeoutError, URLError, OSError, ValueError):
+        return ""
+    quotes = payload.get("quotes") if isinstance(payload, dict) else None
+    if not isinstance(quotes, list):
+        return ""
+    for quote in quotes:
+        if not isinstance(quote, dict):
+            continue
+        symbol = clean_text(quote.get("symbol")).upper()
+        if symbol != key[0].upper():
+            continue
+        return clean_name(quote.get("shortname") or quote.get("longname") or quote.get("displayName"))
+    return ""
+
+
 def yahoo_quote_from_result(core, key: tuple[str, str], result: dict) -> dict | None:
     last_price = result.get("regularMarketPrice")
     if not isinstance(last_price, (int, float)):

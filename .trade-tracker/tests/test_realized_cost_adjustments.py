@@ -32,6 +32,7 @@ from trade_tracker.html_tables import (
     add_holdings_cny_settlement_footer_script,
     insert_holding_metric_columns,
     normalize_legacy_holdings_table,
+    normalize_legacy_open_option_table,
     normalize_legacy_open_option_sections,
 )
 from trade_tracker.dividends import DIVIDEND_SHEET_NAME, load_dividend_events, load_workbook_dividend_events
@@ -332,14 +333,14 @@ class RealizedCostAdjustmentTests(unittest.TestCase):
             sheet = workbook.active
             sheet.title = "交易记录"
             sheet.append(["类型", "开仓", "平仓", "代码", "名称", "事件", "数量", "币种"])
-            sheet.append(["股票", today - timedelta(days=100), today - timedelta(days=90), "688001", "示例新材", "现股", 100, "人民币"])
-            sheet.append(["股票", current_start, None, "688001", "示例新材", "现股", 100, "人民币"])
-            sheet.append(["股票", today - timedelta(days=5), None, "688001", "示例新材", "现股", 50, "人民币"])
+            sheet.append(["股票", today - timedelta(days=100), today - timedelta(days=90), "688102", "斯瑞新材", "现股", 100, "人民币"])
+            sheet.append(["股票", current_start, None, "688102", "斯瑞新材", "现股", 100, "人民币"])
+            sheet.append(["股票", today - timedelta(days=5), None, "688102", "斯瑞新材", "现股", 50, "人民币"])
             workbook.save(path)
 
             days = build_holding_days_map(FakeCore(), path)
 
-        self.assertEqual(days[("688001", "CNY")], "40")
+        self.assertEqual(days[("688102", "CNY")], "40")
 
     def test_short_holding_uses_inverse_cost_direction(self):
         closed_short = row(
@@ -444,6 +445,166 @@ class RealizedCostAdjustmentTests(unittest.TestCase):
         self.assertEqual(mark["float_pnl"], "28.00")
         self.assertEqual(mark["float_pnl_class"], "value-positive")
         self.assertEqual(mark["capital"], "1,000.00")
+
+    def test_open_cash_secured_put_exposure_merges_into_underlying_holding(self):
+        open_put = row(
+            kind="卖出",
+            open_date=46140,
+            exp=46170,
+            ticker="TICKER_A",
+            event="认沽",
+            strike=50,
+            qty=1,
+            open_price=1.5,
+            fee=0,
+            capital=5000,
+            multiplier=100,
+            currency="人民币",
+        )
+        covered_call = row(
+            kind="卖出",
+            open_date=46140,
+            exp=46170,
+            ticker="TICKER_A",
+            event="认购",
+            strike=60,
+            qty=1,
+            open_price=1.5,
+            fee=0,
+            capital=6000,
+            multiplier=100,
+            currency="人民币",
+        )
+        data = {
+            "holdings": [
+                {
+                    "ticker": "TICKER_A",
+                    "currency": "人民币",
+                    "side": "多头",
+                    "qty": "1000",
+                    "all_in_cost": "人民币 8,000.00",
+                    "avg_cost": "人民币 8.00",
+                    "market_value": "人民币 10,000.00",
+                    "last_price": "人民币 10.00",
+                    "float_pnl": "人民币 2,000.00",
+                    "daily_pnl": "人民币 0.00",
+                }
+            ],
+            "stock_summary": [
+                {
+                    "ticker": "TICKER_A",
+                    "currency": "人民币",
+                    "dividend": "人民币 0.00",
+                    "unrealized_pnl": "人民币 2,000.00",
+                    "total_pnl": "人民币 2,000.00",
+                    "capital_raw": 8_000.0,
+                    "capital_days_raw": 80_000.0,
+                }
+            ],
+            "annual_summary": [],
+        }
+
+        def fake_quote(_core, _ticker, _currency, event, _expiry, _strike):
+            return {"option_code": "OPT", "last_price": 0.5 if event == "认沽" else 0.1}
+
+        with patch("trade_tracker.options.fetch_option_quote", side_effect=fake_quote):
+            patched = patch_dashboard_data_with_options(FakeCore(), [(2, open_put), (3, covered_call)], data)
+
+        holding = patched["holdings"][0]
+        self.assertEqual(holding["market_value"], "人民币 15,000.00")
+        self.assertEqual(holding["all_in_cost"], "人民币 13,000.00")
+        self.assertEqual(holding["float_pnl"], "人民币 2,100.00")
+        self.assertEqual(holding["float_pnl_pct"], "16.15%")
+        self.assertEqual(holding["side"], "多头+卖出认沽")
+        self.assertEqual(patched["market_value_text"], "人民币 15,000.00")
+        self.assertEqual(patched["cost_text"], "人民币 13,000.00")
+        self.assertEqual(patched["unrealized_pnl_text"], "人民币 2,100.00")
+        self.assertEqual(patched["stock_summary"][0]["total_pnl"], "人民币 2,100.00")
+        self.assertEqual(patched["stock_summary"][0]["capital_raw"], 13_000.0)
+        self.assertEqual(patched["stock_summary"][0]["return_rate"], "16.15%")
+
+    def test_open_cash_secured_put_without_stock_gets_holding_row(self):
+        class RowCapitalWithFeesCore(FakeCore):
+            @staticmethod
+            def row_capital(cells, trade_type, event):
+                return 5002.52
+
+        open_put = row(
+            kind="卖出",
+            open_date=46140,
+            exp=46170,
+            ticker="TICKER_C",
+            event="认沽",
+            strike=50,
+            qty=1,
+            open_price=1.5,
+            fee=0,
+            capital=5000,
+            multiplier=100,
+            currency="人民币",
+        )
+        data = {"holdings": [], "stock_summary": [], "annual_summary": []}
+
+        with patch("trade_tracker.options.fetch_option_quote", return_value={"option_code": "OPT", "last_price": 0.5}):
+            patched = patch_dashboard_data_with_options(RowCapitalWithFeesCore(), [(2, open_put)], data)
+
+        self.assertEqual(len(patched["holdings"]), 1)
+        holding = patched["holdings"][0]
+        self.assertEqual(holding["ticker"], "TICKER_C")
+        self.assertEqual(holding["side"], "卖出认沽")
+        self.assertEqual(holding["qty"], "1腿")
+        self.assertEqual(holding["market_value"], "人民币 5,000.00")
+        self.assertEqual(holding["all_in_cost"], "人民币 5,000.00")
+        self.assertEqual(holding["float_pnl"], "人民币 100.00")
+        self.assertEqual(patched["market_value_text"], "人民币 5,000.00")
+
+    def test_open_cash_secured_put_without_stock_fetches_missing_name_online(self):
+        class OnlineNameCore(FakeCore):
+            def lookup_security_name(self, ticker, currency="", allow_online=False):
+                return "PDD Holdings Inc." if allow_online else ""
+
+        open_put = row(
+            kind="卖出",
+            open_date=46140,
+            exp=46170,
+            ticker="PDD",
+            event="认沽",
+            strike=100,
+            qty=1,
+            open_price=1.5,
+            fee=0,
+            capital=10000,
+            multiplier=100,
+            currency="美元",
+        )
+        data = {"holdings": [], "stock_summary": [], "annual_summary": []}
+
+        with patch("trade_tracker.options.fetch_option_quote", return_value={"option_code": "OPT", "last_price": 0.5}):
+            patched = patch_dashboard_data_with_options(OnlineNameCore(), [(2, open_put)], data)
+
+        self.assertEqual(patched["holdings"][0]["name"], "PDD Holdings Inc.")
+
+    def test_open_option_table_refills_placeholder_name_online(self):
+        class OnlineNameCore(FakeCore):
+            def lookup_security_name(self, ticker, currency="", allow_online=False):
+                return "Roundhill Memory ETF" if allow_online else ""
+
+        table = """
+        <table class="summary-table">
+          <thead><tr>
+            <th>代码</th><th>名称</th><th>类型</th><th>事件</th><th>到期日</th><th>行权价</th>
+            <th>数量</th><th>乘数</th><th>开仓价</th><th>现价</th><th>浮动盈亏</th><th>占用本金</th><th>币种</th>
+          </tr></thead>
+          <tbody>
+            <tr><td>DRAM</td><td>--</td><td>卖出</td><td>认沽</td><td>2026/05/22</td>
+            <td>51</td><td>1</td><td>100</td><td>3.3</td><td>3.3</td><td>-2.52</td><td>5100</td><td>美元</td></tr>
+          </tbody>
+        </table>
+        """
+
+        normalized = normalize_legacy_open_option_table(OnlineNameCore(), table)
+
+        self.assertIn('<td class="text">DRAM</td><td class="text">Roundhill Memory ETF</td>', normalized)
 
     def test_parse_hkex_option_detail_price(self):
         html = """
@@ -716,7 +877,7 @@ class RealizedCostAdjustmentTests(unittest.TestCase):
         html = """
         <table class="summary-table">
         <thead><tr><th>代码</th><th>数量</th><th>最新市值</th><th>持仓成本</th><th>浮动盈亏</th><th>现价</th><th>开仓</th></tr></thead>
-        <tbody><tr><td>09999</td><td>500</td><td>港币 39,240.00</td><td>港币 -12,793.53</td><td>港币 52,033.53</td><td>78.48</td><td>2026-03-20</td></tr></tbody>
+        <tbody><tr><td>07709</td><td>500</td><td>港币 39,240.00</td><td>港币 -12,793.53</td><td>港币 52,033.53</td><td>78.48</td><td>2026-03-20</td></tr></tbody>
         </table>
         """
         normalized = normalize_legacy_holdings_table(FakeCore(), html)

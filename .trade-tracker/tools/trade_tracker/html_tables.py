@@ -523,7 +523,16 @@ def safe_lookup_name(core, code: str, currency: str) -> str:
             existing = core.lookup_security_name(code, currency, False)
         except Exception:
             existing = ""
+        if not existing:
+            try:
+                existing = core.lookup_security_name(code, currency, True)
+            except Exception:
+                existing = ""
     return existing or "-"
+
+
+def is_missing_name(value: str) -> bool:
+    return not value or value in {"-", "--"}
 
 
 def td_for_label(label: str, value: str, sort_value: float | None = None, color_value: float | None = None) -> str:
@@ -582,7 +591,9 @@ def normalize_legacy_holdings_table(core, table_html: str) -> str:
             continue
         code = text_for_label(labels, cells, "代码")
         currency = infer_row_currency(labels, cells)
-        name = text_for_label(labels, cells, "名称") or safe_lookup_name(core, code, currency)
+        name = text_for_label(labels, cells, "名称")
+        if is_missing_name(name):
+            name = safe_lookup_name(core, code, currency)
         market_currency, market_value = money_for_label(labels, cells, "最新市值")
         cost_currency, cost_value = money_for_label(labels, cells, "持仓成本")
         pnl_currency, pnl_value = money_for_label(labels, cells, "浮动盈亏", "未实现盈亏")
@@ -628,7 +639,7 @@ def normalize_legacy_holdings_table(core, table_html: str) -> str:
 
 def normalize_legacy_open_option_table(core, table_html: str) -> str:
     labels, rows = row_cells_from_tbody(table_html)
-    if not labels or all(label in labels for label in OPEN_OPTION_COLUMN_ORDER):
+    if not labels:
         return table_html
     if "代码" not in labels or "事件" not in labels or not any(label in labels for label in ("到期", "到期日")):
         return table_html
@@ -640,7 +651,9 @@ def normalize_legacy_open_option_table(core, table_html: str) -> str:
             continue
         code = text_for_label(labels, cells, "代码")
         currency = infer_row_currency(labels, cells)
-        name = text_for_label(labels, cells, "名称") or safe_lookup_name(core, code, currency)
+        name = text_for_label(labels, cells, "名称")
+        if is_missing_name(name):
+            name = safe_lookup_name(core, code, currency)
         raw_qty = number_for_label(labels, cells, "数量")
         qty = abs(raw_qty) if raw_qty is not None else None
         trade_type = text_for_label(labels, cells, "类型") or ("卖出" if raw_qty is not None and raw_qty < 0 else "买入")
@@ -1205,8 +1218,9 @@ def add_balanced_summary_table_script(html_text: str) -> str:
 
 
 def annotate_holdings_fx_note(html_text: str) -> str:
-    new_note = "这里只统计已经录入主表、且当前仍未平仓的现股仓位；个股仓位按实时汇率折成人民币口径计算，并按仓位绝对值从大到小排序。盈利仓位的回本空间显示 -，亏损仓位才显示还需上涨或下跌多少。"
+    new_note = "这里只统计已经录入主表、且当前仍未平仓的现股仓位；未平仓卖出认沽会按标的并入持仓口径，最新市值和个股仓位按占用本金计算，浮动盈亏单独展示，covered call 不重复计入。个股仓位按实时汇率折成人民币口径计算，并按仓位绝对值从大到小排序。"
     old_notes = [
+        "这里只统计已经录入主表、且当前仍未平仓的现股仓位；个股仓位按实时汇率折成人民币口径计算，并按仓位绝对值从大到小排序。盈利仓位的回本空间显示 -，亏损仓位才显示还需上涨或下跌多少。",
         "这里只统计已经录入主表、且当前仍未平仓的现股仓位，按仓位绝对值从大到小排序。空头仓位会标成“空头”，数量和最新市值会按负值展示；回本空间这一列对多头显示还需上涨多少，对空头显示还需下跌多少。",
         "这里只统计已经录入主表、且当前仍未平仓的现股仓位，按仓位绝对值从大到小排序。",
     ]

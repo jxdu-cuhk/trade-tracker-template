@@ -167,6 +167,59 @@ class ClearanceAnalysisTests(unittest.TestCase):
         self.assertEqual(monthly[0].best_cycle.ticker, "TICKER_A")
         self.assertEqual(monthly[0].worst_cycle.ticker, "TICKER_B")
 
+    def test_clearance_cycles_ignore_options_for_same_underlying(self):
+        rows = [
+            (
+                2,
+                row(
+                    kind="股票",
+                    open_date=date(2026, 1, 5),
+                    close_date=date(2026, 1, 20),
+                    ticker="ticker_a",
+                    event="现股",
+                    qty=100,
+                    capital=1000,
+                    pnl=120,
+                    currency="人民币",
+                ),
+            ),
+            (
+                3,
+                row(
+                    kind="卖出",
+                    open_date=date(2026, 1, 8),
+                    close_date=date(2026, 1, 15),
+                    ticker="ticker_a",
+                    event="认购",
+                    qty=1,
+                    capital=200,
+                    pnl=30,
+                    currency="人民币",
+                ),
+            ),
+            (
+                4,
+                row(
+                    kind="卖出",
+                    open_date=date(2026, 1, 21),
+                    close_date=date(2026, 1, 22),
+                    ticker="ticker_a",
+                    event="认沽",
+                    qty=1,
+                    capital=200,
+                    pnl=10,
+                    currency="人民币",
+                ),
+            ),
+        ]
+
+        cycles = build_clearance_cycles(FakeCore(), rows)
+
+        self.assertEqual(len(cycles), 1)
+        self.assertEqual(cycles[0].pnl, 120)
+        self.assertEqual(cycles[0].capital, 1000)
+        self.assertEqual(cycles[0].trade_count, 1)
+
     def test_clearance_best_and_worst_only_show_matching_profit_direction(self):
         positive = summarize_clearance_cycles(
             build_clearance_cycles(
@@ -242,6 +295,7 @@ class ClearanceAnalysisTests(unittest.TestCase):
         self.assertIn("统计粒度", section)
         self.assertIn("阶段汇总", section)
         self.assertIn("清仓明细", section)
+        self.assertNotIn("期权盈亏", section)
         self.assertIn('data-clearance-detail-table', section)
         self.assertIn('data-clearance-month="2026-01"', section)
         self.assertIn('data-clearance-year="2026年"', section)

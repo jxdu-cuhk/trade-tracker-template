@@ -74,6 +74,11 @@ def safe_security_name(core, ticker: str, currency: str) -> str:
         name = core.lookup_security_name(ticker, currency, False)
     except Exception:
         name = ""
+    if not name and ticker and not ticker.isdigit():
+        try:
+            name = core.lookup_security_name(ticker, currency, True)
+        except Exception:
+            name = ""
     return clean_name(name) or "-"
 
 

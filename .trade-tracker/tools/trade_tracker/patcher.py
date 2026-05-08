@@ -27,8 +27,17 @@ from .html_tables import (
 )
 from .historical_curve import replace_curve_series_with_historical_prices
 from .holdings_overview import insert_holdings_account_overview
-from .market_data import fetch_quote_payload, infer_secid, patch_quote_fetchers, start_fx_rates_prefetch
+from .market_data import (
+    fetch_quote_payload,
+    fetch_tencent_security_quote,
+    fetch_yahoo_security_name,
+    fetch_yahoo_security_quotes,
+    infer_secid,
+    patch_quote_fetchers,
+    start_fx_rates_prefetch,
+)
 from .names import cache_name, load_name_cache, load_workbook_name_map, name_cache_key
+from .option_analysis import insert_option_analysis_section
 from .options import patch_dashboard_data_with_options
 from .overview import move_dividend_metric_later, optimize_overview_metrics, split_overview_by_currency
 from .refresh_panel import add_refresh_progress_panel
@@ -37,6 +46,10 @@ from .return_curve import render_tonghuashun_curve_panels
 from .runtime import emit_progress
 from .settings import HOLDINGS_COLUMN_ORDER
 from .utils import clean_name, parse_display_number
+
+
+def contains_cjk(text: str) -> bool:
+    return any("\u4e00" <= char <= "\u9fff" for char in text or "")
 
 
 def patch_core(core, workbook_path: Path) -> None:
@@ -61,27 +74,61 @@ def patch_core(core, workbook_path: Path) -> None:
     def lookup_security_name(ticker, currency="", allow_online=False):
         normalized_ticker = core.normalize_ticker(ticker, currency)
         normalized_currency = core.normalize_currency(currency)
+
+        def usable_name(name: str) -> bool:
+            if not name:
+                return False
+            if normalized_currency == "USD" and contains_cjk(name):
+                return False
+            return True
+
         if normalized_ticker:
             cached = load_name_cache().get(name_cache_key(core, normalized_ticker, normalized_currency))
-            if cached:
+            if cached and usable_name(cached):
                 return cached
 
             source_name = source_name_map.get(normalized_ticker)
-            if source_name:
+            if source_name and usable_name(source_name):
                 return cache_name(core, normalized_ticker, normalized_currency, source_name)
 
         original_name = clean_name(original_lookup_security_name(ticker, currency, allow_online))
-        if original_name:
+        original_is_code = original_name.upper() == normalized_ticker.upper()
+        if usable_name(original_name) and (not allow_online or not original_is_code):
             return cache_name(core, normalized_ticker, normalized_currency, original_name)
 
         if allow_online and normalized_ticker:
+            if normalized_currency == "USD":
+                try:
+                    yahoo_name = fetch_yahoo_security_name(core, normalized_ticker, normalized_currency)
+                except Exception:
+                    yahoo_name = ""
+                if usable_name(yahoo_name) and yahoo_name.upper() != normalized_ticker.upper():
+                    return cache_name(core, normalized_ticker, normalized_currency, yahoo_name)
             secid = infer_secid(core, normalized_ticker, normalized_currency)
             if secid:
                 data = fetch_quote_payload(secid)
                 if isinstance(data, dict):
                     online_name = clean_name(data.get("f58"))
-                    if online_name:
+                    if usable_name(online_name):
                         return cache_name(core, normalized_ticker, normalized_currency, online_name)
+            try:
+                tencent_quote = fetch_tencent_security_quote(core, normalized_ticker, normalized_currency)
+            except Exception:
+                tencent_quote = None
+            if isinstance(tencent_quote, dict):
+                online_name = clean_name(tencent_quote.get("name"))
+                if usable_name(online_name) and online_name.upper() != normalized_ticker.upper():
+                    return cache_name(core, normalized_ticker, normalized_currency, online_name)
+            try:
+                yahoo_quote = fetch_yahoo_security_quotes(core, [(normalized_ticker, normalized_currency)]).get(
+                    (normalized_ticker, normalized_currency)
+                )
+            except Exception:
+                yahoo_quote = None
+            if isinstance(yahoo_quote, dict):
+                online_name = clean_name(yahoo_quote.get("name"))
+                if usable_name(online_name) and online_name.upper() != normalized_ticker.upper():
+                    return cache_name(core, normalized_ticker, normalized_currency, online_name)
         return ""
 
     def build_dashboard_data(rows):
@@ -147,6 +194,7 @@ def patch_core(core, workbook_path: Path) -> None:
         html = insert_holdings_account_overview(core, html, rows)
         html = insert_realized_analysis_section(core, html, rows)
         html = insert_clearance_analysis_section(core, html, rows)
+        html = insert_option_analysis_section(core, html, rows)
         html = remove_stock_summary_section(html)
         html = apply_tonghuashun_curve_style(html)
         html = reorder_dashboard_sections(html)
