@@ -119,9 +119,12 @@ def render_ths_curve_top(total_pnl: str, return_rate: str) -> str:
             <div class="ths-curve-hero">
               <div class="ths-curve-kicker" data-curve-hero-kicker>全部盈亏</div>
               <div class="ths-curve-value {html.escape(total_class)}" data-curve-hero-value>{html.escape(total_text)}</div>
-              <div class="ths-curve-rate"><span class="ths-curve-badge">账</span> <span data-curve-hero-rate-label>净资产收益率</span> <strong class="{html.escape(rate_class)}" data-curve-hero-rate>{html.escape(rate_text)}</strong></div>
+              <div class="ths-curve-rate"><span class="ths-curve-badge">账</span> <span data-curve-hero-rate-label>总资产收益率</span> <strong class="{html.escape(rate_class)}" data-curve-hero-rate>{html.escape(rate_text)}</strong></div>
+              <div class="ths-curve-compare-pill" data-curve-compare-pill hidden>
+                <span>同期上证 <strong data-curve-compare-benchmark>--</strong></span>
+                <span>跑赢指数 <strong data-curve-compare-excess>--</strong></span>
+              </div>
               <div class="ths-curve-tabs" aria-label="收益曲线时间范围">
-                <button type="button" class="ths-curve-tab" data-curve-range="day">当日</button>
                 <button type="button" class="ths-curve-tab" data-curve-range="month">本月</button>
                 <button type="button" class="ths-curve-tab" data-curve-range="three-month">近三月</button>
                 <button type="button" class="ths-curve-tab" data-curve-range="year">今年</button>
@@ -136,29 +139,28 @@ def render_ths_curve_top(total_pnl: str, return_rate: str) -> str:
               </div>
             </div>
             <div class="ths-curve-legend" aria-label="收益曲线图例">
-              <span><i class="ths-dot ths-dot-me"></i>我</span>
+              <span><i class="ths-dot ths-dot-me"></i>汇总</span>
               <span><i class="ths-dot ths-dot-base"></i>上证指数</span>
-            </div>
-            <div class="ths-curve-control-row">
-              <div class="ths-curve-metric-tabs" aria-label="收益曲线口径">
-                <button type="button" class="ths-curve-metric is-active" data-curve-metric="return">收益率</button>
-                <button type="button" class="ths-curve-metric" data-curve-metric="amount">盈亏金额</button>
-              </div>
             </div>
 """
 
 
 def render_ths_curve_summary(return_rate: str) -> str:
-    rate_text = return_rate or "--"
-    rate_class = value_tone_class(rate_text)
-    beat_text = rate_text if rate_text != "--" else "--"
-    return f"""
-            <div class="ths-curve-summary">
-              <div class="ths-curve-summary-title" data-curve-summary-title>对比上证指数</div>
-              <div class="ths-curve-summary-value {html.escape(rate_class)}" data-curve-summary-value>{html.escape(beat_text)}</div>
-              <div class="ths-curve-bars">
-                <div><span>我:</span><strong class="{html.escape(rate_class)}" data-curve-summary-mine>{html.escape(rate_text)}</strong></div>
-                <div><span data-curve-summary-benchmark-name>上证指数:</span><strong data-curve-summary-benchmark>--</strong></div>
+    return """
+            <div class="ths-curve-control-panel">
+              <div class="ths-curve-analysis-row">
+                <span class="ths-curve-row-label">收益分析</span>
+                <div class="ths-curve-metric-tabs" aria-label="收益曲线口径">
+                  <button type="button" class="ths-curve-metric is-active" data-curve-metric="return">收益率</button>
+                  <button type="button" class="ths-curve-metric" data-curve-metric="amount">盈亏金额</button>
+                </div>
+              </div>
+              <div class="ths-curve-analysis-row">
+                <span class="ths-curve-row-label">辅助功能</span>
+                <div class="ths-curve-assist-list" aria-label="收益曲线辅助功能">
+                  <button type="button" class="ths-curve-assist" data-curve-assist="extreme" aria-pressed="false"><i></i>极值分析</button>
+                  <button type="button" class="ths-curve-assist is-active" data-curve-assist="drawdown" aria-pressed="true"><i></i>最大回撤</button>
+                </div>
               </div>
             </div>
 """

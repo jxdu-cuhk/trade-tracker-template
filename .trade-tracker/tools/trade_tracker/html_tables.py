@@ -595,7 +595,7 @@ def normalize_legacy_holdings_table(core, table_html: str) -> str:
         if not side or side == "-":
             side = "空头" if (qty_value is not None and qty_value < 0) or (market_value is not None and market_value < 0) else "多头"
         avg_cost = cost_value / abs(qty_value) if cost_value is not None and qty_value not in (None, 0) else None
-        pnl_rate = pnl_value / cost_value if pnl_value is not None and cost_value not in (None, 0) else None
+        pnl_rate = pnl_value / abs(cost_value) if pnl_value is not None and cost_value not in (None, 0) else None
         breakeven = breakeven_gap(avg_cost, price_value, pnl_value)
         if breakeven is None and pnl_value is not None and pnl_value < -0.005 and cost_value is not None and market_value not in (None, 0):
             breakeven = cost_value / abs(market_value) - 1
@@ -1106,7 +1106,7 @@ def add_balanced_summary_table_script(html_text: str) -> str:
               const pnlParsed = holdingsPnlIndex >= 0 ? parseCurrencyCell(cells[holdingsPnlIndex]?.textContent || '') : null;
               const weightCell = holdingsWeightIndex >= 0 ? cells[holdingsWeightIndex] : null;
               const weight = weightCell ? Number.parseFloat(weightCell.dataset.sortValue ?? 'NaN') : NaN;
-              if (costParsed) stats.holdingCost += costParsed.value;
+              if (costParsed) stats.holdingCost += Math.abs(costParsed.value);
               if (pnlParsed) stats.holdingPnl += pnlParsed.value;
               if (!Number.isNaN(weight)) stats.positionWeight += weight;
             }
@@ -1428,7 +1428,7 @@ def add_holdings_cny_settlement_footer_script(html_text: str) -> str:
           }}
 
           function blankStats(summaryKind) {{
-            return {{ summaryKind, count: 0, money: {{}}, capital: 0, capitalDays: 0, positionWeight: 0 }};
+            return {{ summaryKind, count: 0, money: {{}}, capital: 0, capitalDays: 0, positionWeight: 0, holdingCostAbs: 0, holdingPnl: 0 }};
           }}
 
           function addMoney(stats, label, value, rate) {{
@@ -1475,6 +1475,18 @@ def add_holdings_cny_settlement_footer_script(html_text: str) -> str:
                 cny.capitalDays += capitalDays * rate;
               }}
               if (table.dataset.summaryKind === 'holdings' && positionWeightIndex >= 0) {{
+                const costIndex = labels.indexOf('持仓成本');
+                const pnlIndex = labels.indexOf('浮动盈亏');
+                const cost = costIndex >= 0 ? numberFromText(cells[costIndex].textContent) : NaN;
+                const pnl = pnlIndex >= 0 ? numberFromText(cells[pnlIndex].textContent) : NaN;
+                if (Number.isFinite(cost)) {{
+                  stats.holdingCostAbs += Math.abs(cost);
+                  cny.holdingCostAbs += Math.abs(cost * rate);
+                }}
+                if (Number.isFinite(pnl)) {{
+                  stats.holdingPnl += pnl;
+                  cny.holdingPnl += pnl * rate;
+                }}
                 const positionWeight = Number.parseFloat(cells[positionWeightIndex].dataset.sortValue ?? 'NaN');
                 if (Number.isFinite(positionWeight)) {{
                   stats.positionWeight += positionWeight;
@@ -1511,9 +1523,9 @@ def add_holdings_cny_settlement_footer_script(html_text: str) -> str:
                 text = formatNumber(numeric);
                 cell.className = classForValue(label, numeric, cell.className);
               }} else if (label === '盈亏率' && stats.summaryKind === 'holdings') {{
-                const pnl = stats.money['浮动盈亏'];
-                const cost = stats.money['持仓成本'];
-                numeric = Number.isFinite(pnl) && cost ? pnl / Math.abs(cost) : null;
+                const pnl = stats.holdingPnl;
+                const cost = stats.holdingCostAbs;
+                numeric = Number.isFinite(pnl) && cost ? pnl / cost : null;
                 text = formatPercent(numeric);
                 cell.className = classForValue(label, numeric, cell.className);
               }} else if (label === '个股仓位' && stats.summaryKind === 'holdings') {{

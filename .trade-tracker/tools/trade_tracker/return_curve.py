@@ -306,17 +306,23 @@ def render_curve_card(index: int, series: dict[str, object]) -> str:
                 <div class="curve-card" data-return-curve-card data-series-index="{index}">
                   <div class="curve-card-head">
                     <div>
-                      <h3 class="curve-title">{html.escape(currency)} 历史总盈亏曲线</h3>
+                      <h3 class="curve-title">{html.escape(currency)} 收益分析曲线</h3>
                       <p class="curve-subtitle" data-curve-subtitle>--</p>
                     </div>
                     <div class="curve-badge" data-curve-badge>--</div>
                   </div>
-                  <svg class="curve-svg" viewBox="0 0 620 260" role="img" aria-label="{html.escape(currency)}历史总盈亏曲线">
-                    <line class="curve-axis" x1="34" y1="18" x2="34" y2="216"></line>
-                    <line class="curve-axis" x1="34" y1="216" x2="564" y2="216"></line>
+                  <svg class="curve-svg" viewBox="0 0 620 330" role="img" aria-label="{html.escape(currency)}收益分析曲线">
+                    <line class="curve-axis" x1="34" y1="24" x2="34" y2="282"></line>
+                    <line class="curve-axis" x1="34" y1="282" x2="564" y2="282"></line>
                     <g data-curve-grid-lines></g>
                     <g data-curve-y-labels></g>
-                    <line class="curve-zero-line" x1="34" y1="216" x2="564" y2="216" data-curve-zero-line></line>
+                    <g class="curve-extreme-layer" data-curve-extreme-layer>
+                      <line class="curve-extreme-line curve-extreme-max" data-curve-extreme-max-line></line>
+                      <line class="curve-extreme-line curve-extreme-min" data-curve-extreme-min-line></line>
+                      <text class="curve-extreme-label curve-extreme-label-max" data-curve-extreme-max-label>--</text>
+                      <text class="curve-extreme-label curve-extreme-label-min" data-curve-extreme-min-label>--</text>
+                    </g>
+                    <line class="curve-zero-line" x1="34" y1="282" x2="564" y2="282" data-curve-zero-line></line>
                     <rect class="curve-drawdown-band" data-curve-drawdown-band></rect>
                     <path class="curve-benchmark-line" data-curve-benchmark-line></path>
                     <path class="curve-area" data-curve-area></path>
@@ -327,16 +333,17 @@ def render_curve_card(index: int, series: dict[str, object]) -> str:
                     <g class="curve-drawdown-layer" data-curve-drawdown-layer>
                       <circle class="curve-drawdown-marker curve-drawdown-peak" data-curve-drawdown-peak></circle>
                       <circle class="curve-drawdown-marker curve-drawdown-trough" data-curve-drawdown-trough></circle>
+                      <text class="curve-drawdown-label" data-curve-drawdown-label>--</text>
                     </g>
                     <g class="curve-hover-layer" data-curve-hover-layer>
                       <line class="curve-hover-line" data-curve-hover-line></line>
                       <circle class="curve-hover-dot curve-hover-dot-me" data-curve-hover-dot-me></circle>
                       <circle class="curve-hover-dot curve-hover-dot-base" data-curve-hover-dot-base></circle>
                     </g>
-                    <text class="curve-axis-label" x="34" y="246" text-anchor="start" data-curve-start-label>--</text>
-                    <text class="curve-axis-label" x="564" y="246" text-anchor="end" data-curve-end-label>--</text>
+                    <text class="curve-axis-label" x="34" y="314" text-anchor="start" data-curve-start-label>--</text>
+                    <text class="curve-axis-label" x="564" y="314" text-anchor="end" data-curve-end-label>--</text>
                     <text class="curve-end-value" x="574" y="18" data-curve-end-value>--</text>
-                    <rect class="curve-hover-capture" x="10" y="8" width="588" height="224" data-curve-hover-capture></rect>
+                    <rect class="curve-hover-capture" x="0" y="0" width="620" height="306" data-curve-hover-capture></rect>
                   </svg>
                   <div class="curve-tooltip" data-curve-tooltip hidden></div>
                   <div class="curve-risk-caption" data-curve-drawdown-caption hidden></div>
@@ -366,11 +373,11 @@ def render_curve_script(payload: list[dict[str, object]]) -> str:
 
                   const dims = {{
                     width: 620,
-                    height: 260,
+                    height: 330,
                     left: 34,
                     right: 56,
-                    top: 18,
-                    bottom: 42,
+                    top: 24,
+                    bottom: 48,
                   }};
                   dims.innerWidth = dims.width - dims.left - dims.right;
                   dims.innerHeight = dims.height - dims.top - dims.bottom;
@@ -509,17 +516,17 @@ def render_curve_script(payload: list[dict[str, object]]) -> str:
                   }}
 
                   function rangePnlLabel(range) {{
-                    if (range === 'day') return '当日总盈亏';
-                    if (range === 'month') return '本月末总盈亏';
-                    if (range === 'three-month') return '近三月末总盈亏';
-                    if (range === 'year') return '今年末总盈亏';
-                    if (range === 'three-year') return '近三年末总盈亏';
-                    if (range === 'custom') return '阶段末总盈亏';
-                    return '历史总盈亏';
+                    if (range === 'day') return '当日盈亏';
+                    if (range === 'month') return '本月盈亏';
+                    if (range === 'three-month') return '近三月盈亏';
+                    if (range === 'year') return '今年盈亏';
+                    if (range === 'three-year') return '近三年盈亏';
+                    if (range === 'custom') return '阶段盈亏';
+                    return '全部盈亏';
                   }}
 
                   function rangeRateLabel(range) {{
-                    return '总盈亏率';
+                    return '总资产收益率';
                   }}
 
                   function filteredPoints(points, range, latest, customStart, customEnd) {{
@@ -641,6 +648,21 @@ def render_curve_script(payload: list[dict[str, object]]) -> str:
                   function setSvgHidden(node, hidden) {{
                     if (!node) return;
                     node.style.display = hidden ? 'none' : '';
+                  }}
+
+                  function shortDateLabel(label) {{
+                    const text = String(label || '');
+                    const match = text.match(/^(\\d{{4}})[\\/-](\\d{{2}})[\\/-](\\d{{2}})$/);
+                    if (!match) return text;
+                    return `${{match[1].slice(2)}}.${{match[2]}}.${{match[3]}}`;
+                  }}
+
+                  function activeAssists() {{
+                    const isActive = (name) => root.querySelector(`[data-curve-assist="${{name}}"]`)?.classList.contains('is-active');
+                    return {{
+                      drawdown: isActive('drawdown'),
+                      extreme: isActive('extreme'),
+                    }};
                   }}
 
                   function drawdownNav(point) {{
@@ -783,8 +805,9 @@ def render_curve_script(payload: list[dict[str, object]]) -> str:
                     hide();
                   }}
 
-                  function drawCard(card, series, range, latest, customStart, customEnd, metric) {{
+                  function drawCard(card, series, range, latest, customStart, customEnd, metric, assists) {{
                     metric = metric === 'amount' ? 'amount' : 'return';
+                    assists = assists || activeAssists();
                     let points = filteredPoints(series.points || [], range, latest, customStart, customEnd);
                     const rawBenchmarkPoints = series.benchmark?.points || [];
                     const benchmarkPoints = series.benchmark
@@ -819,21 +842,25 @@ def render_curve_script(payload: list[dict[str, object]]) -> str:
                       if (currentCapital > 0) return currentCapital;
                       return baseCapital;
                     }}
-                    function accountValuesFrom(visiblePoints, periodCapital) {{
+                    function accountValuesFrom(visiblePoints, periodCapital, rangeMode) {{
+                      const rangeBaseAmount = rangeMode === 'all' ? 0 : Number(visiblePoints[0]?.value || 0);
                       return visiblePoints.map((point, index) => {{
                         const previousPoint = index > 0 ? visiblePoints[index - 1] : null;
                         const delta = previousPoint ? Number(point.value || 0) - Number(previousPoint.value || 0) : 0;
                         const returnBase = returnBaseForPoint(point, previousPoint);
                         const dailyReturn = returnBase > 0 ? (delta / returnBase) * 100 : 0;
                         const floatAmount = Number(point.value || 0);
+                        const periodAmount = floatAmount - rangeBaseAmount;
                         const pointCapital = capitalForPoint(point);
-                        const floatReturn = pointCapital > 0 ? (floatAmount / pointCapital) * 100 : 0;
+                        const returnCapital = rangeMode === 'all' ? pointCapital : periodCapital;
+                        const floatReturn = returnCapital > 0 ? (periodAmount / returnCapital) * 100 : 0;
                         return {{
                           ...point,
                           dailyAmountValue: delta,
                           dailyReturn,
-                          amountValue: floatAmount,
-                          cumulativeAmountValue: floatAmount,
+                          amountValue: periodAmount,
+                          cumulativeAmountValue: periodAmount,
+                          rawAmountValue: floatAmount,
                           baseCapital: returnBase > 0 ? returnBase : baseCapital,
                           referenceCapital: periodCapital,
                           returnValue: floatReturn,
@@ -841,7 +868,7 @@ def render_curve_script(payload: list[dict[str, object]]) -> str:
                         }};
                       }});
                     }}
-                    let accountValues = accountValuesFrom(points, referenceCapital);
+                    let accountValues = accountValuesFrom(points, referenceCapital, range);
                     const firstBenchmarkClose = benchmarkBaseClose(rawBenchmarkPoints, range, latest, customStart, customEnd, benchmarkPoints);
                     let benchmarkGrowth = 1;
                     const benchmarkValues = firstBenchmarkClose > 0
@@ -900,7 +927,7 @@ def render_curve_script(payload: list[dict[str, object]]) -> str:
                     const periodExcessAmount = Number.isFinite(periodPnl) && Number.isFinite(periodBenchmarkAmount)
                       ? Number(periodPnl) - Number(periodBenchmarkAmount)
                       : NaN;
-                    const drawdown = maxDrawdownFor(accountValues, metric);
+                    const drawdown = assists.drawdown ? maxDrawdownFor(accountValues, metric) : null;
                     const areaPath = `${{linePath}} L ${{lastPos[0].toFixed(2)}} ${{zeroY.toFixed(2)}} L ${{firstPos[0].toFixed(2)}} ${{zeroY.toFixed(2)}} Z`;
 
                     const gridLines = card.querySelector('[data-curve-grid-lines]');
@@ -930,6 +957,40 @@ def render_curve_script(payload: list[dict[str, object]]) -> str:
                       }});
                     }}
 
+                    const extremeLayer = card.querySelector('[data-curve-extreme-layer]');
+                    const extremeMaxLine = card.querySelector('[data-curve-extreme-max-line]');
+                    const extremeMinLine = card.querySelector('[data-curve-extreme-min-line]');
+                    const extremeMaxLabel = card.querySelector('[data-curve-extreme-max-label]');
+                    const extremeMinLabel = card.querySelector('[data-curve-extreme-min-label]');
+                    const extremeItems = accountMetricValues
+                      .map((point, index) => ({{ point, index, value: Number(point.metricValue), position: positions[index] }}))
+                      .filter((item) => Number.isFinite(item.value) && item.position);
+                    if (assists.extreme && extremeItems.length) {{
+                      const maxItem = extremeItems.reduce((best, item) => (item.value > best.value ? item : best), extremeItems[0]);
+                      const minItem = extremeItems.reduce((best, item) => (item.value < best.value ? item : best), extremeItems[0]);
+                      const applyExtremeLine = (lineNode, labelNode, item, side) => {{
+                        const y = pointY(item.value);
+                        if (lineNode) {{
+                          lineNode.setAttribute('x1', String(dims.left));
+                          lineNode.setAttribute('x2', String(dims.width - dims.right));
+                          lineNode.setAttribute('y1', y.toFixed(2));
+                          lineNode.setAttribute('y2', y.toFixed(2));
+                        }}
+                        if (labelNode) {{
+                          const x = side === 'right' ? dims.width - dims.right - 8 : dims.left + 8;
+                          labelNode.setAttribute('x', String(x));
+                          labelNode.setAttribute('y', String(Math.max(dims.top + 12, Math.min(dims.top + dims.innerHeight - 4, y - 6))));
+                          labelNode.setAttribute('text-anchor', side === 'right' ? 'end' : 'start');
+                          labelNode.textContent = axisText(item.value, metric);
+                        }}
+                      }};
+                      applyExtremeLine(extremeMaxLine, extremeMaxLabel, maxItem, 'right');
+                      applyExtremeLine(extremeMinLine, extremeMinLabel, minItem, 'left');
+                      setSvgHidden(extremeLayer, false);
+                    }} else {{
+                      setSvgHidden(extremeLayer, true);
+                    }}
+
                     const line = card.querySelector('[data-curve-line]');
                     const glow = card.querySelector('[data-curve-line-glow]');
                     const benchmarkLine = card.querySelector('[data-curve-benchmark-line]');
@@ -938,6 +999,7 @@ def render_curve_script(payload: list[dict[str, object]]) -> str:
                     const drawdownLayer = card.querySelector('[data-curve-drawdown-layer]');
                     const drawdownPeak = card.querySelector('[data-curve-drawdown-peak]');
                     const drawdownTrough = card.querySelector('[data-curve-drawdown-trough]');
+                    const drawdownLabel = card.querySelector('[data-curve-drawdown-label]');
                     const drawdownCaption = card.querySelector('[data-curve-drawdown-caption]');
                     const area = card.querySelector('[data-curve-area]');
                     const zero = card.querySelector('[data-curve-zero-line]');
@@ -971,6 +1033,15 @@ def render_curve_script(payload: list[dict[str, object]]) -> str:
                         drawdownTrough.setAttribute('cx', troughPos[0].toFixed(2));
                         drawdownTrough.setAttribute('cy', troughPos[1].toFixed(2));
                         drawdownTrough.setAttribute('r', '3.8');
+                      }}
+                      if (drawdownLabel) {{
+                        const labelText = metric === 'amount' ? signedMoneyText(drawdown.amount) : percentText(drawdown.rate);
+                        const labelX = Math.max(dims.left + 8, Math.min(dims.width - dims.right - 8, troughPos[0] - 6));
+                        const labelY = Math.max(dims.top + 14, Math.min(dims.top + dims.innerHeight - 4, troughPos[1] - 8));
+                        drawdownLabel.setAttribute('x', labelX.toFixed(2));
+                        drawdownLabel.setAttribute('y', labelY.toFixed(2));
+                        drawdownLabel.setAttribute('text-anchor', 'end');
+                        drawdownLabel.textContent = labelText;
                       }}
                       if (drawdownCaption) {{
                         const recoveryText = drawdown.recovery
@@ -1082,7 +1153,7 @@ def render_curve_script(payload: list[dict[str, object]]) -> str:
                     if (endValue) {{
                       endValue.textContent = '';
                       endValue.setAttribute('x', String(Math.min(lastPos[0] + 10, 568)));
-                      endValue.setAttribute('y', String(Math.max(20, Math.min(214, lastPos[1] - 8))));
+                      endValue.setAttribute('y', String(Math.max(24, Math.min(280, lastPos[1] - 8))));
                     }}
                     card.dataset.curveMetric = metric;
                     card.dataset.accountReturn = Number.isFinite(periodReturn) ? String(periodReturn) : '';
@@ -1096,6 +1167,8 @@ def render_curve_script(payload: list[dict[str, object]]) -> str:
                     card.dataset.periodReturn = Number.isFinite(periodReturn) ? String(periodReturn) : '';
                     card.dataset.periodLabel = rangePnlLabel(range);
                     card.dataset.periodRateLabel = rangeRateLabel(range);
+                    card.dataset.periodStart = first.date || '';
+                    card.dataset.periodEnd = last.date || '';
                   }}
 
                   function updateSummaryBar(row, value, scale) {{
@@ -1163,30 +1236,18 @@ def render_curve_script(payload: list[dict[str, object]]) -> str:
                     const value = root.querySelector('[data-curve-hero-value]');
                     const rate = root.querySelector('[data-curve-hero-rate]');
                     const rateLabel = root.querySelector('[data-curve-hero-rate-label]');
-                    const badge = primaryCard.querySelector('[data-curve-badge]');
+                    const comparePill = root.querySelector('[data-curve-compare-pill]');
+                    const compareBenchmark = root.querySelector('[data-curve-compare-benchmark]');
+                    const compareExcess = root.querySelector('[data-curve-compare-excess]');
                     captureCurveHeroDefaults();
                     const periodPnl = Number(primaryCard.dataset.periodPnl || 'NaN');
                     const periodReturn = Number(primaryCard.dataset.periodReturn || 'NaN');
-                    if (range === 'all') {{
-                      if (kicker) {{
-                        kicker.textContent = kicker.dataset.defaultText || '全部盈亏';
-                        kicker.className = kicker.dataset.defaultClass || 'ths-curve-kicker';
-                      }}
-                      if (value) {{
-                        value.textContent = value.dataset.defaultText || '--';
-                        value.className = value.dataset.defaultClass || 'ths-curve-value';
-                      }}
-                      if (rate) {{
-                        rate.textContent = rate.dataset.defaultText || '--';
-                        rate.className = rate.dataset.defaultClass || '';
-                      }}
-                      if (rateLabel) {{
-                        rateLabel.textContent = rateLabel.dataset.defaultText || '净资产收益率';
-                        rateLabel.className = rateLabel.dataset.defaultClass || '';
-                      }}
-                      return;
-                    }}
-                    if (kicker) kicker.textContent = primaryCard.dataset.periodLabel || '区间盈亏';
+                    const benchmarkReturn = Number(primaryCard.dataset.benchmarkReturn || 'NaN');
+                    const excessReturn = Number(primaryCard.dataset.excessReturn || 'NaN');
+                    const start = shortDateLabel(primaryCard.dataset.periodStart || '');
+                    const end = shortDateLabel(primaryCard.dataset.periodEnd || '');
+                    const dateRange = start && end ? `(${{start}}-${{end}})` : '';
+                    if (kicker) kicker.textContent = `${{primaryCard.dataset.periodLabel || '区间盈亏'}}${{dateRange}}`;
                     if (value) {{
                       setToneClass(value, periodPnl, 'ths-curve-value');
                       value.textContent = signedMoneyText(periodPnl);
@@ -1196,6 +1257,13 @@ def render_curve_script(payload: list[dict[str, object]]) -> str:
                       rate.textContent = percentText(periodReturn);
                     }}
                     if (rateLabel) rateLabel.textContent = primaryCard.dataset.periodRateLabel || '区间收益率';
+                    if (comparePill) comparePill.hidden = !Number.isFinite(benchmarkReturn);
+                    if (compareBenchmark) compareBenchmark.textContent = percentText(benchmarkReturn);
+                    if (compareExcess) {{
+                      compareExcess.classList.remove('value-positive', 'value-negative', 'value-zero');
+                      compareExcess.classList.add(excessReturn > 0 ? 'value-positive' : excessReturn < 0 ? 'value-negative' : 'value-zero');
+                      compareExcess.textContent = percentText(excessReturn);
+                    }}
                   }}
 
                   function redraw() {{
@@ -1203,13 +1271,14 @@ def render_curve_script(payload: list[dict[str, object]]) -> str:
                     const range = active ? active.dataset.curveRange : 'all';
                     const activeMetric = root.querySelector('.ths-curve-metric.is-active');
                     const metric = activeMetric?.dataset.curveMetric === 'amount' ? 'amount' : 'return';
+                    const assists = activeAssists();
                     const latest = latestIso();
                     const customStart = root.querySelector('[data-curve-custom-start]')?.value || '';
                     const customEnd = root.querySelector('[data-curve-custom-end]')?.value || '';
                     root.querySelectorAll('[data-return-curve-card]').forEach((card) => {{
                       const index = Number(card.dataset.seriesIndex || '0');
                       const series = seriesList[index];
-                      if (series) drawCard(card, series, range, latest, customStart, customEnd, metric);
+                      if (series) drawCard(card, series, range, latest, customStart, customEnd, metric, assists);
                     }});
                     updateCurveHero(range, metric);
                     updateCurveSummary(metric);
@@ -1224,12 +1293,21 @@ def render_curve_script(payload: list[dict[str, object]]) -> str:
                       redraw();
                     }});
                   }});
-                  root.querySelectorAll('.ths-curve-metric').forEach((button) => {{
-                    button.addEventListener('click', () => {{
+                  root.addEventListener('click', (event) => {{
+                    const metricButton = event.target?.closest?.('.ths-curve-metric');
+                    if (metricButton && root.contains(metricButton)) {{
                       root.querySelectorAll('.ths-curve-metric').forEach((item) => item.classList.remove('is-active'));
-                      button.classList.add('is-active');
+                      metricButton.classList.add('is-active');
                       redraw();
-                    }});
+                      return;
+                    }}
+                    const assistButton = event.target?.closest?.('.ths-curve-assist:not(.is-fixed)');
+                    if (assistButton && root.contains(assistButton)) {{
+                      const nextActive = !assistButton.classList.contains('is-active');
+                      assistButton.classList.toggle('is-active', nextActive);
+                      assistButton.setAttribute('aria-pressed', nextActive ? 'true' : 'false');
+                      redraw();
+                    }}
                   }});
                   root.querySelectorAll('[data-curve-custom-start], [data-curve-custom-end]').forEach((input) => {{
                     input.addEventListener('change', redraw);

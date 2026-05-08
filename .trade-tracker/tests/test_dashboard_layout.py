@@ -76,8 +76,12 @@ class DashboardLayoutTests(unittest.TestCase):
         self.assertIn("2.11%", updated)
         self.assertIn("上证指数", updated)
         self.assertIn('data-curve-metric="amount"', updated)
+        self.assertIn('data-curve-assist="extreme"', updated)
+        self.assertIn('data-curve-assist="drawdown"', updated)
+        self.assertNotIn('data-curve-assist="asset-return"', updated)
+        self.assertIn("ths-curve-control-panel", updated)
         self.assertLess(updated.index("ths-curve-hero"), updated.index("curve-grid"))
-        self.assertLess(updated.index("curve-grid"), updated.index("ths-curve-summary"))
+        self.assertLess(updated.index("curve-grid"), updated.index("ths-curve-control-panel"))
         self.assertEqual(updated, updated_again)
 
     def test_collapse_secondary_sections_only_keeps_current_and_options_open(self):

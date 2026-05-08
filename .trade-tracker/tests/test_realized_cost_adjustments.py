@@ -332,14 +332,14 @@ class RealizedCostAdjustmentTests(unittest.TestCase):
             sheet = workbook.active
             sheet.title = "交易记录"
             sheet.append(["类型", "开仓", "平仓", "代码", "名称", "事件", "数量", "币种"])
-            sheet.append(["股票", today - timedelta(days=100), today - timedelta(days=90), "DEMO", "示例标的", "现股", 100, "人民币"])
-            sheet.append(["股票", current_start, None, "DEMO", "示例标的", "现股", 100, "人民币"])
-            sheet.append(["股票", today - timedelta(days=5), None, "DEMO", "示例标的", "现股", 50, "人民币"])
+            sheet.append(["股票", today - timedelta(days=100), today - timedelta(days=90), "688001", "示例新材", "现股", 100, "人民币"])
+            sheet.append(["股票", current_start, None, "688001", "示例新材", "现股", 100, "人民币"])
+            sheet.append(["股票", today - timedelta(days=5), None, "688001", "示例新材", "现股", 50, "人民币"])
             workbook.save(path)
 
             days = build_holding_days_map(FakeCore(), path)
 
-        self.assertEqual(days[("DEMO", "CNY")], "40")
+        self.assertEqual(days[("688001", "CNY")], "40")
 
     def test_short_holding_uses_inverse_cost_direction(self):
         closed_short = row(
@@ -712,13 +712,26 @@ class RealizedCostAdjustmentTests(unittest.TestCase):
         self.assertIn(">多头</td>", normalized)
         self.assertIn(">美元</td>", normalized)
 
+    def test_legacy_holdings_return_rate_uses_absolute_adjusted_cost(self):
+        html = """
+        <table class="summary-table">
+        <thead><tr><th>代码</th><th>数量</th><th>最新市值</th><th>持仓成本</th><th>浮动盈亏</th><th>现价</th><th>开仓</th></tr></thead>
+        <tbody><tr><td>09999</td><td>500</td><td>港币 39,240.00</td><td>港币 -12,793.53</td><td>港币 52,033.53</td><td>78.48</td><td>2026-03-20</td></tr></tbody>
+        </table>
+        """
+        normalized = normalize_legacy_holdings_table(FakeCore(), html)
+
+        self.assertIn(">406.72%</td>", normalized)
+        self.assertIn("value-positive", normalized)
+        self.assertNotIn(">-406.72%</td>", normalized)
+
     def test_existing_holding_days_column_uses_current_position_start(self):
         previous = dict(state.HOLDING_DAYS_MAP)
-        state.HOLDING_DAYS_MAP = {("DEMO", "CNY"): "280"}
+        state.HOLDING_DAYS_MAP = {("601698", "CNY"): "280"}
         html = """
         <table class="summary-table">
         <thead><tr><th>代码</th><th>名称</th><th>最新市值</th><th>浮动盈亏</th><th>盈亏率</th><th>持股数</th><th>现价</th><th>持仓成本</th><th>当日盈亏</th><th>个股仓位</th><th>持股天数</th><th>持仓均价</th><th>回本空间</th><th>方向</th><th>币种</th><th>最近买入</th></tr></thead>
-        <tbody><tr><td>DEMO</td><td>示例标的</td><td>人民币 -172,349.00</td><td>人民币 -78,349.00</td><td>-83.35%</td><td>-4700</td><td>36.67</td><td>人民币 94,000.00</td><td>人民币 -4,982.00</td><td>6.19%</td><td>28</td><td>20</td><td>-45.46%</td><td>空头</td><td>人民币</td><td>2025/07/28</td></tr></tbody>
+        <tbody><tr><td>601698</td><td>中国卫通</td><td>人民币 -172,349.00</td><td>人民币 -78,349.00</td><td>-83.35%</td><td>-4700</td><td>36.67</td><td>人民币 94,000.00</td><td>人民币 -4,982.00</td><td>6.19%</td><td>28</td><td>20</td><td>-45.46%</td><td>空头</td><td>人民币</td><td>2025/07/28</td></tr></tbody>
         </table>
         """
         try:
