@@ -2094,6 +2094,37 @@ details[data-ths-return-curve] .ths-curve-bars div:nth-child(2) strong {
   gap: 16px;
 }
 
+.performance-report-mode {
+  justify-self: end;
+  display: inline-flex;
+  align-items: center;
+  gap: 3px;
+  padding: 4px;
+  border-radius: 999px;
+  background: #f3f4f6;
+}
+
+.performance-report-mode button {
+  appearance: none;
+  border: 0;
+  border-radius: 999px;
+  background: transparent;
+  color: #6f767d;
+  cursor: pointer;
+  font: inherit;
+  font-size: 13px;
+  font-weight: 900;
+  min-height: 32px;
+  padding: 0 14px;
+  transition: background 0.16s ease, color 0.16s ease, box-shadow 0.16s ease;
+}
+
+.performance-report-mode button.is-active {
+  background: #ff4d4f;
+  color: #ffffff;
+  box-shadow: 0 6px 14px rgba(255, 77, 79, 0.18);
+}
+
 .performance-block {
   background: #ffffff;
   border: 1px solid #eef1f4;
@@ -2828,6 +2859,15 @@ details[data-ths-return-curve] .ths-curve-bars div:nth-child(2) strong {
 
   details[data-ths-return-curve] .ths-curve-bars {
     grid-template-columns: 1fr;
+  }
+
+  .performance-report-mode {
+    justify-self: stretch;
+    width: 100%;
+  }
+
+  .performance-report-mode button {
+    flex: 1;
   }
 
   .performance-swing-grid,

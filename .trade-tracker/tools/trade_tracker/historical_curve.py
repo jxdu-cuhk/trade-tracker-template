@@ -1064,6 +1064,7 @@ def add_stock_snapshot_value(
     currency: str,
     currency_raw: str,
     amount: float,
+    capital: float = 0.0,
 ) -> None:
     if not ticker or not currency or abs(amount) <= EPSILON:
         return
@@ -1076,9 +1077,12 @@ def add_stock_snapshot_value(
             "currency": currency,
             "currency_raw": currency_raw or currency,
             "value": 0.0,
+            "capital": 0.0,
         }
         bucket[key] = item
     item["value"] = float(item.get("value") or 0.0) + float(amount)
+    if capital and capital > EPSILON:
+        item["capital"] = float(item.get("capital") or 0.0) + float(capital)
 
 
 def cny_rate_for_currency(currency: str, rates: dict[str, float]) -> float:
@@ -1108,12 +1112,15 @@ def build_performance_stock_payload(
         period_key: str,
         end_item: dict[str, object],
         delta: float,
+        capital: float,
     ) -> None:
         source_currency = clean_text(end_item.get("currency"))
         rate = cny_rate_for_currency(source_currency, rates)
         pnl = delta * rate
         if abs(pnl) <= 0.005:
             return
+        cny_capital = capital * rate
+        return_rate = (pnl / cny_capital) * 100 if cny_capital > EPSILON else None
         periods.setdefault(period_key, []).append(
             {
                 "code": clean_text(end_item.get("code")),
@@ -1121,6 +1128,8 @@ def build_performance_stock_payload(
                 "currency": source_currency,
                 "pnl": pnl,
                 "nativePnl": delta,
+                "capital": cny_capital,
+                "rate": return_rate,
             }
         )
 
@@ -1146,12 +1155,16 @@ def build_performance_stock_payload(
         for month, (_day, end_item) in month_last.items():
             base = month_base.get(month)
             base_value = float((base[1].get("value") if base else 0.0) or 0.0)
-            add_period(months, month, end_item, float(end_item.get("value") or 0.0) - base_value)
+            base_capital = float((base[1].get("capital") if base else 0.0) or 0.0)
+            end_capital = float(end_item.get("capital") or 0.0)
+            add_period(months, month, end_item, float(end_item.get("value") or 0.0) - base_value, max(base_capital, end_capital))
 
         for year, (_day, end_item) in year_last.items():
             base = year_base.get(year)
             base_value = float((base[1].get("value") if base else 0.0) or 0.0)
-            add_period(years, year, end_item, float(end_item.get("value") or 0.0) - base_value)
+            base_capital = float((base[1].get("capital") if base else 0.0) or 0.0)
+            end_capital = float(end_item.get("capital") or 0.0)
+            add_period(years, year, end_item, float(end_item.get("value") or 0.0) - base_value, max(base_capital, end_capital))
 
     for periods in (months, years):
         for key, items in list(periods.items()):
@@ -1275,6 +1288,7 @@ def build_historical_curve_series(core, rows: list[tuple[int, dict[int, object]]
                     currency=lot.currency,
                     currency_raw=lot.currency_raw,
                     amount=realized_pnl_for_curve(lot, history),
+                    capital=lot.capital,
                 )
             for event in stock_value_events:
                 if event.currency != currency or not event.ticker or event.event_date > day:
@@ -1316,6 +1330,7 @@ def build_historical_curve_series(core, rows: list[tuple[int, dict[int, object]]
                     currency=lot.currency,
                     currency_raw=lot.currency_raw,
                     amount=floating,
+                    capital=lot.capital,
                 )
             if not has_active_position and not has_priced_position and not closed_on_day and not event_on_day:
                 continue

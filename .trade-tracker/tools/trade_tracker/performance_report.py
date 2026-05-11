@@ -24,18 +24,22 @@ def render_performance_report_section() -> str:
           </summary>
           <div class="section-body">
             <div class="performance-report-shell">
+              <div class="performance-report-mode" role="group" aria-label="收益报告展示口径" data-report-mode-control>
+                <button type="button" class="is-active" data-report-mode="amount" aria-pressed="true">金额</button>
+                <button type="button" data-report-mode="rate" aria-pressed="false">收益率</button>
+              </div>
               <section class="performance-block">
                 <h3 class="performance-title">账户涨跌</h3>
                 <div class="performance-swing-grid">
                   <div class="performance-swing-card swing-positive" data-report-growth>
-                    <span>最大涨幅</span>
+                    <span data-report-title>最大涨幅</span>
                     <strong data-report-rate>--</strong>
                     <em data-report-amount>--</em>
                     <small data-report-days>增长天数 --</small>
                     <small data-report-range>--</small>
                   </div>
                   <div class="performance-swing-card swing-negative" data-report-drawdown>
-                    <span>最大回撤</span>
+                    <span data-report-title>最大回撤</span>
                     <strong data-report-rate>--</strong>
                     <em data-report-amount>--</em>
                     <small data-report-days>回撤天数 --</small>
@@ -86,9 +90,11 @@ def render_performance_report_section() -> str:
               const dataNode = document.querySelector('[data-return-curve-json]');
               const realizedNode = document.querySelector('[data-realized-payload]');
               const stockPayloadNode = document.querySelector('[data-performance-stock-payload]');
+              const modeControl = section.querySelector('[data-report-mode-control]');
               let series = null;
               let realizedTrades = [];
               let stockPerformanceMonths = {};
+              let reportMode = 'amount';
               try {
                 const payload = JSON.parse(dataNode?.textContent || '[]');
                 series = payload && payload[0];
@@ -132,6 +138,14 @@ def render_performance_report_section() -> str:
               function percent(value) {
                 if (!Number.isFinite(value)) return '--';
                 return `${value > 0 ? '+' : ''}${value.toFixed(2)}%`;
+              }
+
+              function formatMetric(value, compact = false) {
+                return reportMode === 'rate' ? percent(value) : (compact ? compactMoney(value) : signedMoney(value));
+              }
+
+              function metricLabel() {
+                return reportMode === 'rate' ? '收益率' : '折人民币';
               }
 
               function shortDate(iso) {
@@ -227,33 +241,101 @@ def render_performance_report_section() -> str:
                 return result;
               }
 
-              function fillSwingCard(card, item, dayLabel) {
-                if (!card || !item) return;
-                card.querySelector('[data-report-rate]').textContent = percent(item.rate);
-                card.querySelector('[data-report-amount]').textContent = signedMoney(item.amount);
+              function accountTotalReturn(items) {
+                if (!items.length) return null;
+                const start = items[0];
+                const end = items[items.length - 1];
+                return {
+                  start,
+                  end,
+                  amount: number(end.amountValue) || 0,
+                  rate: number(end.returnValue) || 0,
+                  days: daysBetween(start, end),
+                };
+              }
+
+              function maxAmountDrawdown(items) {
+                let peak = null;
+                let result = null;
+                items.forEach((point) => {
+                  const amount = number(point.amountValue);
+                  if (!Number.isFinite(amount)) return;
+                  if (!peak || amount > peak.amount) peak = { point, amount };
+                  if (!peak || peak.point === point) return;
+                  const drawdownAmount = amount - peak.amount;
+                  const rate = (number(point.returnValue) || 0) - (number(peak.point.returnValue) || 0);
+                  if (drawdownAmount < 0 && (!result || drawdownAmount < result.amount)) {
+                    result = { start: peak.point, end: point, rate, amount: drawdownAmount, days: daysBetween(peak.point, point) };
+                  }
+                });
+                return result;
+              }
+
+              function fillSwingCard(card, item, options) {
+                if (!card) return;
+                const title = options?.title || '';
+                const dayLabel = options?.dayLabel || '';
+                const titleNode = card.querySelector('[data-report-title]');
+                const secondary = card.querySelector('[data-report-amount]');
+                if (titleNode && title) titleNode.textContent = title;
+                if (!item) {
+                  card.querySelector('[data-report-rate]').textContent = '--';
+                  if (secondary) {
+                    secondary.hidden = true;
+                    secondary.textContent = '';
+                  }
+                  card.querySelector('[data-report-days]').textContent = `${dayLabel} --`;
+                  card.querySelector('[data-report-range]').textContent = '--';
+                  return;
+                }
+                card.querySelector('[data-report-rate]').textContent = reportMode === 'rate' ? percent(item.rate) : signedMoney(item.amount);
+                if (secondary) {
+                  secondary.hidden = reportMode === 'rate';
+                  secondary.textContent = reportMode === 'rate' ? '' : percent(item.rate);
+                }
                 card.querySelector('[data-report-days]').textContent = `${dayLabel} ${Number.isFinite(item.days) ? item.days : '--'}`;
                 card.querySelector('[data-report-range]').textContent = `${shortDate(item.start.iso)}-${shortDate(item.end.iso)}`;
               }
 
-              fillSwingCard(section.querySelector('[data-report-growth]'), maxGrowth(points), '增长天数');
-              fillSwingCard(section.querySelector('[data-report-drawdown]'), maxDrawdown(points), '回撤天数');
+              const amountGrowthSwing = accountTotalReturn(points);
+              const amountDrawdownSwing = maxAmountDrawdown(points);
+              const rateGrowthSwing = maxGrowth(points);
+              const rateDrawdownSwing = maxDrawdown(points);
+
+              function renderSwingCards() {
+                if (reportMode === 'rate') {
+                  fillSwingCard(section.querySelector('[data-report-growth]'), rateGrowthSwing, { title: '最大涨幅', dayLabel: '增长天数' });
+                  fillSwingCard(section.querySelector('[data-report-drawdown]'), rateDrawdownSwing, { title: '最大回撤', dayLabel: '回撤天数' });
+                  return;
+                }
+                fillSwingCard(section.querySelector('[data-report-growth]'), amountGrowthSwing, { title: '累计收益', dayLabel: '累计天数' });
+                fillSwingCard(section.querySelector('[data-report-drawdown]'), amountDrawdownSwing, { title: '最大回撤', dayLabel: '回撤天数' });
+              }
 
               const dayChanges = points.slice(1).map((point) => ({
                 iso: point.iso,
                 label: shortDate(point.iso),
                 value: number(point.dailyAmountValue) || 0,
+                rate: number(point.dailyReturn) || 0,
               }));
-              const profitDays = dayChanges.filter((item) => item.value > 0);
-              const lossDays = dayChanges.filter((item) => item.value < 0);
               const sum = (items) => items.reduce((total, item) => total + item.value, 0);
+              const sumRate = (items) => items.reduce((total, item) => total + (number(item.rate) || 0), 0);
+              const compoundRate = (items) => {
+                if (!items.length) return 0;
+                const multiplier = items.reduce((amount, item) => amount * (1 + (number(item.rate) || 0) / 100), 1);
+                return (multiplier - 1) * 100;
+              };
+              const metricValue = (item) => reportMode === 'rate' ? (number(item?.rate) || 0) : (number(item?.value) || 0);
+              const metricTotal = (items) => reportMode === 'rate' ? compoundRate(items) : sum(items);
               const maxBy = (items, pick) => items.length ? items.reduce((best, item) => (pick(item) > pick(best) ? item : best), items[0]) : null;
               const minBy = (items, pick) => items.length ? items.reduce((best, item) => (pick(item) < pick(best) ? item : best), items[0]) : null;
 
               const monthMap = new Map();
               dayChanges.forEach((item) => {
                 const key = String(item.iso).slice(0, 7);
-                const bucket = monthMap.get(key) || { key, value: 0, days: 0, wins: 0, losses: 0 };
+                const bucket = monthMap.get(key) || { key, value: 0, rateMultiplier: 1, days: 0, wins: 0, losses: 0 };
                 bucket.value += item.value;
+                bucket.rateMultiplier *= 1 + (number(item.rate) || 0) / 100;
                 bucket.days += 1;
                 if (item.value > 0) bucket.wins += 1;
                 if (item.value < 0) bucket.losses += 1;
@@ -263,6 +345,7 @@ def render_performance_report_section() -> str:
                 .sort((a, b) => a.key.localeCompare(b.key))
                 .map((item) => ({
                   ...item,
+                  rate: (item.rateMultiplier - 1) * 100,
                   year: String(item.key).slice(0, 4),
                   month: Number(String(item.key).slice(5, 7)),
                 }));
@@ -273,23 +356,29 @@ def render_performance_report_section() -> str:
                 const ratioRight = Math.max(6, 100 - ratioLeft);
                 return `
                   <div class="performance-compare-card">
-                    <div><strong>${leftTitle}</strong><span>${leftSub}</span><em class="value-positive">${signedMoney(leftValue)}</em></div>
+                    <div><strong>${leftTitle}</strong><span>${leftSub}</span><em class="value-positive">${formatMetric(leftValue)}</em></div>
                     <b>${leftValue || rightValue ? `${Math.round(ratioLeft / 10)} : ${Math.round(ratioRight / 10)}` : '--'}</b>
-                    <div><strong>${rightTitle}</strong><span>${rightSub}</span><em class="value-negative">${signedMoney(rightValue)}</em></div>
+                    <div><strong>${rightTitle}</strong><span>${rightSub}</span><em class="value-negative">${formatMetric(rightValue)}</em></div>
                     <i style="--left:${ratioLeft.toFixed(1)}%;--right:${ratioRight.toFixed(1)}%"></i>
                   </div>
                 `;
               }
 
-              const bestMonth = maxBy(months, (item) => item.value);
-              const worstMonth = minBy(months, (item) => item.value);
-              const bestDay = maxBy(dayChanges, (item) => item.value);
-              const worstDay = minBy(dayChanges, (item) => item.value);
-              section.querySelector('[data-report-compare]').innerHTML = [
-                compareRow('总盈利', `盈利天数 ${profitDays.length}`, sum(profitDays), '总亏损', `亏损天数 ${lossDays.length}`, sum(lossDays)),
-                compareRow('最大月盈利', bestMonth?.key || '--', bestMonth?.value || 0, '最大月亏损', worstMonth?.key || '--', worstMonth?.value || 0),
-                compareRow('最大日盈利', bestDay?.label || '--', bestDay?.value || 0, '最大日亏损', worstDay?.label || '--', worstDay?.value || 0),
-              ].join('');
+              function renderCompare() {
+                const profitDays = dayChanges.filter((item) => metricValue(item) > 0);
+                const lossDays = dayChanges.filter((item) => metricValue(item) < 0);
+                const bestMonth = maxBy(months, metricValue);
+                const worstMonth = minBy(months, metricValue);
+                const bestDay = maxBy(dayChanges, metricValue);
+                const worstDay = minBy(dayChanges, metricValue);
+                const positiveTotal = reportMode === 'rate' ? sumRate(profitDays) : sum(profitDays);
+                const negativeTotal = reportMode === 'rate' ? sumRate(lossDays) : sum(lossDays);
+                section.querySelector('[data-report-compare]').innerHTML = [
+                  compareRow(reportMode === 'rate' ? '盈利日收益' : '总盈利', `盈利天数 ${profitDays.length}`, positiveTotal, reportMode === 'rate' ? '亏损日收益' : '总亏损', `亏损天数 ${lossDays.length}`, negativeTotal),
+                  compareRow('最大月盈利', bestMonth?.key || '--', metricValue(bestMonth), '最大月亏损', worstMonth?.key || '--', metricValue(worstMonth)),
+                  compareRow('最大日盈利', bestDay?.label || '--', metricValue(bestDay), '最大日亏损', worstDay?.label || '--', metricValue(worstDay)),
+                ].join('');
+              }
 
               const years = Array.from(new Set(months.map((item) => item.year))).sort();
               const selectedYears = new Set(years);
@@ -313,7 +402,7 @@ def render_performance_report_section() -> str:
                   .flatMap((year) => Array.from({ length: 12 }, (_, index) => {
                     const month = index + 1;
                     const key = `${year}-${String(month).padStart(2, '0')}`;
-                    return monthByKey.get(key) || { key, year, month, value: 0, days: 0, wins: 0, losses: 0, empty: true };
+                    return monthByKey.get(key) || { key, year, month, value: 0, rate: 0, days: 0, wins: 0, losses: 0, empty: true };
                   }));
               }
 
@@ -359,8 +448,8 @@ def render_performance_report_section() -> str:
                 const bottom = 42;
                 const innerWidth = width - left - right;
                 const innerHeight = height - top - bottom;
-                const positiveMax = Math.max(0, ...items.map((item) => Math.max(0, number(item.value))));
-                const negativeMax = Math.max(0, ...items.map((item) => Math.max(0, -number(item.value))));
+                const positiveMax = Math.max(0, ...items.map((item) => Math.max(0, metricValue(item))));
+                const negativeMax = Math.max(0, ...items.map((item) => Math.max(0, -metricValue(item))));
                 const hasPositive = positiveMax > 0;
                 const hasNegative = negativeMax > 0;
                 let positiveHeight = 0;
@@ -401,10 +490,10 @@ def render_performance_report_section() -> str:
                   `<line class="performance-chart-grid" x1="${left}" y1="${mark.y.toFixed(1)}" x2="${width - right}" y2="${mark.y.toFixed(1)}"></line>`
                 ).join('');
                 const yLabels = gridMarks.filter((mark) => mark.label).map((mark) =>
-                  `<text class="performance-chart-y" x="${left - 8}" y="${mark.y.toFixed(1)}" text-anchor="end">${compactMoney(mark.value)}</text>`
+                  `<text class="performance-chart-y" x="${left - 8}" y="${mark.y.toFixed(1)}" text-anchor="end">${formatMetric(mark.value, true)}</text>`
                 ).join('');
                 const bars = items.map((item, index) => {
-                  const value = number(item.value) || 0;
+                  const value = metricValue(item);
                   const rawHeight = value >= 0 ? value * positiveScale : Math.abs(value) * negativeScale;
                   const barLimit = value >= 0 ? positiveHeight : negativeHeight;
                   const barHeight = value === 0 ? 1 : Math.min(barLimit, Math.max(2, rawHeight));
@@ -418,7 +507,7 @@ def render_performance_report_section() -> str:
                     : '';
                   return `
                     <rect class="performance-chart-bar performance-chart-bar-${tone}${selected}" data-report-month="${item.key}" x="${x.toFixed(1)}" y="${y.toFixed(1)}" width="${barWidth.toFixed(1)}" height="${barHeight.toFixed(1)}" rx="${radius.toFixed(1)}" ry="${radius.toFixed(1)}">
-                      <title>${item.year}年${item.month}月 ${signedMoney(item.value)}</title>
+                      <title>${item.year}年${item.month}月 ${formatMetric(value)}</title>
                     </rect>
                     ${label}
                   `;
@@ -437,7 +526,7 @@ def render_performance_report_section() -> str:
                 ensureSelectedMonth(items, activeMonths);
                 renderCalendarChart(items);
                 if (calendar) {
-                  const maxAbs = Math.max(1, ...items.map((item) => Math.abs(item.value || 0)));
+                  const maxAbs = Math.max(1, ...items.map((item) => Math.abs(metricValue(item))));
                   const byYear = new Map();
                   items.forEach((item) => {
                     const bucket = byYear.get(item.year) || [];
@@ -445,25 +534,26 @@ def render_performance_report_section() -> str:
                     byYear.set(item.year, bucket);
                   });
                   calendar.innerHTML = Array.from(byYear.entries()).map(([year, yearMonths]) => {
-                    const yearTotal = sum(yearMonths);
+                    const yearTotal = metricTotal(yearMonths);
                     const monthTiles = yearMonths.map((item) => {
-                      const tone = item.value > 0 ? 'positive' : item.value < 0 ? 'negative' : 'zero';
+                      const value = metricValue(item);
+                      const tone = value > 0 ? 'positive' : value < 0 ? 'negative' : 'zero';
                       const tradeLabel = item.days ? `${item.days}个交易日` : '无波动';
                       const selected = item.key === selectedMonthKey ? ' is-selected' : '';
-                      return `<button type="button" class="performance-month performance-month-${tone}${selected}" data-report-month="${item.key}" aria-pressed="${item.key === selectedMonthKey ? 'true' : 'false'}" style="--tile-alpha:${tileIntensity(item.value, maxAbs)}"><span>${item.month}月</span><strong>${compactMoney(item.value)}</strong><small>${tradeLabel}</small></button>`;
+                      return `<button type="button" class="performance-month performance-month-${tone}${selected}" data-report-month="${item.key}" aria-pressed="${item.key === selectedMonthKey ? 'true' : 'false'}" style="--tile-alpha:${tileIntensity(value, maxAbs)}"><span>${item.month}月</span><strong>${formatMetric(value, true)}</strong><small>${tradeLabel}</small></button>`;
                     }).join('');
                     return `
                       <div class="performance-year-group">
-                        <div class="performance-year-head"><strong>${year}年</strong><span>${signedMoney(yearTotal)}</span></div>
+                        <div class="performance-year-head"><strong>${year}年</strong><span>${formatMetric(yearTotal)}</span></div>
                         <div class="performance-calendar-grid">${monthTiles}</div>
                       </div>
                     `;
                   }).join('');
                 }
-                if (totalNode) totalNode.textContent = `合计 ${signedMoney(sum(activeMonths))}`;
+                if (totalNode) totalNode.textContent = `合计 ${formatMetric(metricTotal(activeMonths))}`;
                 if (monthCountNode) monthCountNode.textContent = String(activeMonths.length);
-                if (winCountNode) winCountNode.textContent = String(activeMonths.filter((item) => item.value > 0).length);
-                if (lossCountNode) lossCountNode.textContent = String(activeMonths.filter((item) => item.value < 0).length);
+                if (winCountNode) winCountNode.textContent = String(activeMonths.filter((item) => metricValue(item) > 0).length);
+                if (lossCountNode) lossCountNode.textContent = String(activeMonths.filter((item) => metricValue(item) < 0).length);
                 setYearButtonStates();
                 renderStockPanel();
               }
@@ -510,7 +600,6 @@ def render_performance_report_section() -> str:
                   renderCalendar();
                 });
               }
-              renderCalendar();
 
               function stockItemsFromRealizedMonth(monthKey) {
                 const buckets = new Map();
@@ -523,12 +612,16 @@ def render_performance_report_section() -> str:
                   const pnl = number(trade.pnl);
                   if (!Number.isFinite(pnl)) return;
                   const key = `${code}|${currency}`;
-                  const item = buckets.get(key) || { code, name, currency, pnl: 0, count: 0 };
+                  const item = buckets.get(key) || { code, name, currency, pnl: 0, capital: 0, count: 0 };
                   item.pnl += pnl;
+                  item.capital += Math.abs(number(trade.capital) || 0);
                   item.count += 1;
                   buckets.set(key, item);
                 });
-                return Array.from(buckets.values()).sort((a, b) => Math.abs(b.pnl) - Math.abs(a.pnl));
+                return Array.from(buckets.values()).map((item) => ({
+                  ...item,
+                  rate: item.capital > 0 ? (item.pnl / item.capital) * 100 : NaN,
+                })).sort((a, b) => Math.abs(b.pnl) - Math.abs(a.pnl));
               }
 
               function stockItemsForMonth(monthKey) {
@@ -542,6 +635,8 @@ def render_performance_report_section() -> str:
                       sourceCurrency: String(item.sourceCurrency || item.currency || '').trim(),
                       pnl: number(item.pnl),
                       nativePnl: number(item.nativePnl),
+                      capital: number(item.capital),
+                      rate: number(item.rate),
                     }))
                     .filter((item) => item.code && Number.isFinite(item.pnl))
                     .sort((a, b) => Math.abs(b.pnl) - Math.abs(a.pnl));
@@ -567,11 +662,24 @@ def render_performance_report_section() -> str:
                   const pnl = number(row.dataset.totalPnl);
                   if (!code || code === '汇总' || !Number.isFinite(pnl)) return;
                   const key = `${code}|${currency}`;
-                  const item = buckets.get(key) || { code, name, currency, pnl: 0 };
+                  const item = buckets.get(key) || { code, name, currency, pnl: 0, rate: NaN };
                   item.pnl += pnl;
                   buckets.set(key, item);
                 });
                 return Array.from(buckets.values()).sort((a, b) => Math.abs(b.pnl) - Math.abs(a.pnl));
+              }
+
+              function stockMetricValue(item) {
+                if (reportMode === 'rate') {
+                  const rate = number(item?.rate);
+                  if (Number.isFinite(rate)) return rate;
+                }
+                return number(item?.pnl) || 0;
+              }
+
+              function stockMetricText(item) {
+                if (reportMode === 'rate' && Number.isFinite(number(item?.rate))) return percent(number(item.rate));
+                return signedMoney(number(item?.pnl) || 0);
               }
 
               function renderRank(title, items, tone) {
@@ -579,7 +687,7 @@ def render_performance_report_section() -> str:
                   <li>
                     <span>${index + 1}</span>
                     <strong>${escapeHtml(item.name || item.code)}</strong>
-                    <em class="value-${tone}">${signedMoney(item.pnl)}</em>
+                    <em class="value-${tone}">${stockMetricText(item)}</em>
                   </li>
                 `).join('') : '<li class="performance-stock-empty">暂无数据</li>';
                 return `<div class="performance-stock-rank performance-stock-rank-${tone}"><h4>${title}</h4><ol>${rows}</ol></div>`;
@@ -587,7 +695,7 @@ def render_performance_report_section() -> str:
 
               function stockTreemapLayout(items) {
                 const nodes = items
-                  .map((item) => ({ item, absPnl: Math.abs(number(item.pnl) || 0) }))
+                  .map((item) => ({ item, absPnl: Math.abs(stockMetricValue(item)) }))
                   .filter((node) => node.absPnl > 0);
                 const rects = [];
                 function total(list) {
@@ -640,37 +748,61 @@ def render_performance_report_section() -> str:
                   if (!stocks.length) {
                     treemap.innerHTML = `<div class="performance-empty">${escapeHtml(contextLabel)}暂无个股盈亏。</div>`;
                   } else {
-                    const topStocks = stocks.filter((item) => Math.abs(number(item.pnl) || 0) > 0).slice(0, 18);
+                    const topStocks = stocks.filter((item) => Math.abs(stockMetricValue(item)) > 0).sort((a, b) => Math.abs(stockMetricValue(b)) - Math.abs(stockMetricValue(a))).slice(0, 18);
                     const rects = stockTreemapLayout(topStocks);
                     treemap.innerHTML = rects.length ? rects.map((rect) => {
                       const item = rect.item;
-                      const tone = item.pnl >= 0 ? 'positive' : 'negative';
+                      const value = stockMetricValue(item);
+                      const tone = value >= 0 ? 'positive' : 'negative';
                       const title = item.name.length > 10 ? item.name.slice(0, 10) + '...' : item.name;
-                      const currencyLabel = item.currency ? `${item.currency}折人民币` : '折人民币';
+                      const currencyLabel = reportMode === 'rate' ? '收益率' : (item.currency ? `${item.currency}折人民币` : '折人民币');
                       const compactClass = rect.width < 14 || rect.height < 16 ? ' is-compact' : rect.width < 22 || rect.height < 20 ? ' is-small' : '';
-                      const fullTitle = `${item.name || item.code} ${signedMoney(item.pnl)}`;
+                      const fullTitle = `${item.name || item.code} ${stockMetricText(item)}`;
                       const style = `left:${rect.x.toFixed(2)}%;top:${rect.y.toFixed(2)}%;width:${rect.width.toFixed(2)}%;height:${rect.height.toFixed(2)}%;`;
-                      return `<div class="performance-stock-tile performance-stock-${tone}${compactClass}" title="${escapeHtml(fullTitle)}" style="${style}"><span>${escapeHtml(title)}</span><strong>${signedMoney(item.pnl)}</strong><small>${escapeHtml(currencyLabel)}</small></div>`;
+                      return `<div class="performance-stock-tile performance-stock-${tone}${compactClass}" title="${escapeHtml(fullTitle)}" style="${style}"><span>${escapeHtml(title)}</span><strong>${stockMetricText(item)}</strong><small>${escapeHtml(currencyLabel)}</small></div>`;
                     }).join('') : `<div class="performance-empty">${escapeHtml(contextLabel)}暂无有效个股盈亏。</div>`;
                   }
                 }
                 if (stockList) {
-                  const winners = stocks.filter((item) => item.pnl > 0).sort((a, b) => b.pnl - a.pnl).slice(0, 6);
-                  const losers = stocks.filter((item) => item.pnl < 0).sort((a, b) => a.pnl - b.pnl).slice(0, 6);
+                  const winners = stocks.filter((item) => stockMetricValue(item) > 0).sort((a, b) => stockMetricValue(b) - stockMetricValue(a)).slice(0, 6);
+                  const losers = stocks.filter((item) => stockMetricValue(item) < 0).sort((a, b) => stockMetricValue(a) - stockMetricValue(b)).slice(0, 6);
                   stockList.innerHTML = renderRank('盈利榜', winners, 'positive') + renderRank('亏损榜', losers, 'negative');
                 }
                 if (countNode) {
-                  const wins = stocks.filter((item) => item.pnl > 0).length;
-                  const losses = stocks.filter((item) => item.pnl < 0).length;
-                  countNode.innerHTML = `${escapeHtml(contextLabel)} · 盈利个股 <em>${wins}</em> ：亏损个股 <em>${losses}</em> · 折人民币`;
+                  const wins = stocks.filter((item) => stockMetricValue(item) > 0).length;
+                  const losses = stocks.filter((item) => stockMetricValue(item) < 0).length;
+                  countNode.innerHTML = `${escapeHtml(contextLabel)} · 盈利个股 <em>${wins}</em> ：亏损个股 <em>${losses}</em> · ${metricLabel()}`;
                 }
               }
 
-              if (document.readyState === 'loading') {
-                document.addEventListener('DOMContentLoaded', renderStockPanel, { once: true });
-              } else {
-                renderStockPanel();
+              function updateModeButtons() {
+                if (!modeControl) return;
+                modeControl.querySelectorAll('[data-report-mode]').forEach((button) => {
+                  const active = button.dataset.reportMode === reportMode;
+                  button.classList.toggle('is-active', active);
+                  button.setAttribute('aria-pressed', active ? 'true' : 'false');
+                });
               }
+
+              function renderAllPerformance() {
+                renderSwingCards();
+                renderCompare();
+                renderCalendar();
+              }
+
+              if (modeControl) {
+                modeControl.addEventListener('click', (event) => {
+                  const button = event.target?.closest?.('[data-report-mode]');
+                  if (!button || !modeControl.contains(button)) return;
+                  const nextMode = button.dataset.reportMode === 'rate' ? 'rate' : 'amount';
+                  if (nextMode === reportMode) return;
+                  reportMode = nextMode;
+                  updateModeButtons();
+                  renderAllPerformance();
+                });
+                updateModeButtons();
+              }
+              renderAllPerformance();
             })();
             </script>
           </div>

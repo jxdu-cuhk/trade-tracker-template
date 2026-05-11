@@ -164,6 +164,8 @@ class HistoricalCurveTests(unittest.TestCase):
         self.assertEqual(item["name"], "浦发银行")
         self.assertEqual(item["currency"], "人民币")
         self.assertAlmostEqual(item["pnl"], 119.0)
+        self.assertAlmostEqual(item["capital"], 1001.0)
+        self.assertAlmostEqual(item["rate"], item["pnl"] / item["capital"] * 100)
 
     def test_holding_float_uses_trade_cost_as_curve_baseline(self):
         row = stock_row()
