@@ -14,16 +14,19 @@ SECTION_ORDER = [
     "期权收益分析",
     "总体概览",
     "总收益曲线",
+    "收益报告",
     "分年度个股汇总",
     "交易时间线",
 ]
 DEFAULT_OPEN_SECTIONS = {"当前持仓", "未平仓期权"}
+SECTION_ORDER_STORAGE_KEY = "trade-tracker-section-order-v1"
 
 
 DETAILS_PATTERN = re.compile(
-    r'<details class="dashboard-section section-collapsible" open(?: [^>]*)?>.*?</details>',
+    r'<details class="dashboard-section section-collapsible"(?: [^>]*)?>.*?</details>',
     re.S,
 )
+SECTION_ORDER_PANEL_MARKER = 'data-section-order-panel'
 
 
 def normalize_title(value: str) -> str:
@@ -76,6 +79,286 @@ def collapse_secondary_sections(html_text: str) -> str:
         collapsed = re.sub(r"(<details\b[^>]*)\sopen\b", r"\1", block, count=1)
         updated = updated[: match.start()] + collapsed + updated[match.end() :]
     return updated
+
+
+SECTION_ORDER_PANEL_SCRIPT = f"""
+<script>
+(function() {{
+  var STORAGE_KEY = {SECTION_ORDER_STORAGE_KEY!r};
+
+  function ready(callback) {{
+    if (document.readyState === "loading") {{
+      document.addEventListener("DOMContentLoaded", callback, {{ once: true }});
+      return;
+    }}
+    callback();
+  }}
+
+  function readStoredOrder() {{
+    try {{
+      var value = window.localStorage.getItem(STORAGE_KEY);
+      var parsed = value ? JSON.parse(value) : [];
+      return Array.isArray(parsed) ? parsed.filter(function(item) {{ return typeof item === "string" && item; }}) : [];
+    }} catch (error) {{
+      return [];
+    }}
+  }}
+
+  function writeStoredOrder(order) {{
+    try {{
+      window.localStorage.setItem(STORAGE_KEY, JSON.stringify(order));
+    }} catch (error) {{}}
+  }}
+
+  function clearStoredOrder() {{
+    try {{
+      window.localStorage.removeItem(STORAGE_KEY);
+    }} catch (error) {{}}
+  }}
+
+  ready(function() {{
+    var panel = document.querySelector("[data-section-order-panel]");
+    if (!panel || panel.dataset.ready === "1") {{
+      return;
+    }}
+    panel.dataset.ready = "1";
+    var list = panel.querySelector("[data-section-order-list]");
+    var saveButton = panel.querySelector("[data-section-order-save]");
+    var resetButton = panel.querySelector("[data-section-order-reset]");
+    var sections = Array.prototype.slice.call(document.querySelectorAll("details.dashboard-section.section-collapsible"));
+    if (!list || !sections.length) {{
+      return;
+    }}
+
+    function getTitle(section) {{
+      var title = section.querySelector(".section-title");
+      return title ? title.textContent.replace(/\\s+/g, " ").trim() : "";
+    }}
+
+    var defaultTitles = sections.map(getTitle).filter(Boolean);
+
+    function indexIn(order, title) {{
+      var storedIndex = order.indexOf(title);
+      if (storedIndex >= 0) {{
+        return storedIndex;
+      }}
+      var defaultIndex = defaultTitles.indexOf(title);
+      return order.length + (defaultIndex >= 0 ? defaultIndex : defaultTitles.length);
+    }}
+
+    function sortSections(order) {{
+      return sections.slice().sort(function(a, b) {{
+        var titleA = getTitle(a);
+        var titleB = getTitle(b);
+        return indexIn(order, titleA) - indexIn(order, titleB);
+      }});
+    }}
+
+    function sectionInsertionAnchor() {{
+      var anchor = panel;
+      var next = panel.nextElementSibling;
+      while (next && !next.matches("details.dashboard-section.section-collapsible")) {{
+        anchor = next;
+        next = next.nextElementSibling;
+      }}
+      return anchor;
+    }}
+
+    function applyOrder(order) {{
+      var anchor = sectionInsertionAnchor();
+      sortSections(order).forEach(function(section) {{
+        anchor.insertAdjacentElement("afterend", section);
+        anchor = section;
+      }});
+    }}
+
+    function currentListOrder() {{
+      return Array.prototype.slice.call(list.querySelectorAll("[data-section-title]"))
+        .map(function(item) {{ return item.dataset.sectionTitle || ""; }})
+        .filter(Boolean);
+    }}
+
+    function renderList(order) {{
+      list.textContent = "";
+      sortSections(order).forEach(function(section) {{
+        var title = getTitle(section);
+        if (!title) {{
+          return;
+        }}
+        var item = document.createElement("li");
+        var grip = document.createElement("span");
+        var label = document.createElement("span");
+        item.className = "section-order-item";
+        item.draggable = true;
+        item.dataset.sectionTitle = title;
+        item.setAttribute("aria-label", title);
+        grip.className = "section-order-grip";
+        grip.setAttribute("aria-hidden", "true");
+        grip.textContent = "::";
+        label.className = "section-order-label";
+        label.textContent = title;
+        item.appendChild(grip);
+        item.appendChild(label);
+        list.appendChild(item);
+      }});
+    }}
+
+    var storedOrder = readStoredOrder();
+    if (storedOrder.length) {{
+      applyOrder(storedOrder);
+    }}
+    renderList(storedOrder);
+
+    function moveDraggingItem(event, draggingItem, target) {{
+      if (!draggingItem || !target || target === draggingItem) {{
+        return;
+      }}
+      var rect = target.getBoundingClientRect();
+      var afterX = event.clientX > rect.left + rect.width / 2;
+      var afterY = event.clientY > rect.top + rect.height / 2;
+      var sameRow = Math.abs(event.clientY - (rect.top + rect.height / 2)) < rect.height * 0.55;
+      var insertAfter = sameRow ? afterX : afterY;
+      list.insertBefore(draggingItem, insertAfter ? target.nextSibling : target);
+    }}
+
+    var dragging = null;
+    list.addEventListener("dragstart", function(event) {{
+      var item = event.target.closest(".section-order-item");
+      if (!item) {{
+        return;
+      }}
+      dragging = item;
+      item.classList.add("is-dragging");
+      if (event.dataTransfer) {{
+        event.dataTransfer.effectAllowed = "move";
+        event.dataTransfer.setData("text/plain", item.dataset.sectionTitle || "");
+      }}
+    }});
+
+    list.addEventListener("dragend", function() {{
+      if (dragging) {{
+        dragging.classList.remove("is-dragging");
+      }}
+      dragging = null;
+    }});
+
+    list.addEventListener("dragover", function(event) {{
+      var target = event.target.closest(".section-order-item");
+      if (!dragging || !target || target === dragging) {{
+        return;
+      }}
+      event.preventDefault();
+      moveDraggingItem(event, dragging, target);
+    }});
+
+    var pointerDragging = null;
+    var pointerId = null;
+    list.addEventListener("pointerdown", function(event) {{
+      var item = event.target.closest(".section-order-item");
+      if (!item || event.button !== 0) {{
+        return;
+      }}
+      pointerDragging = item;
+      pointerId = event.pointerId;
+      item.classList.add("is-dragging");
+      if (item.setPointerCapture) {{
+        item.setPointerCapture(event.pointerId);
+      }}
+      event.preventDefault();
+    }});
+
+    list.addEventListener("pointermove", function(event) {{
+      if (!pointerDragging || event.pointerId !== pointerId) {{
+        return;
+      }}
+      var element = document.elementFromPoint(event.clientX, event.clientY);
+      var target = element ? element.closest(".section-order-item") : null;
+      if (target && list.contains(target)) {{
+        moveDraggingItem(event, pointerDragging, target);
+      }}
+      event.preventDefault();
+    }});
+
+    function finishPointerDrag(event) {{
+      if (!pointerDragging || event.pointerId !== pointerId) {{
+        return;
+      }}
+      if (pointerDragging.releasePointerCapture) {{
+        try {{
+          pointerDragging.releasePointerCapture(event.pointerId);
+        }} catch (error) {{}}
+      }}
+      pointerDragging.classList.remove("is-dragging");
+      pointerDragging = null;
+      pointerId = null;
+    }}
+
+    list.addEventListener("pointerup", finishPointerDrag);
+    list.addEventListener("pointercancel", finishPointerDrag);
+
+    if (saveButton) {{
+      saveButton.addEventListener("click", function() {{
+        var order = currentListOrder();
+        writeStoredOrder(order);
+        applyOrder(order);
+        window.location.reload();
+      }});
+    }}
+
+    if (resetButton) {{
+      resetButton.addEventListener("click", function() {{
+        clearStoredOrder();
+        window.location.reload();
+      }});
+    }}
+  }});
+}})();
+</script>
+"""
+
+
+def render_section_order_panel() -> str:
+    items = "\n".join(
+        f'        <li class="section-order-item" draggable="true" data-section-title="{html.escape(title)}">'
+        f'<span class="section-order-grip" aria-hidden="true">::</span>'
+        f'<span class="section-order-label">{html.escape(title)}</span></li>'
+        for title in SECTION_ORDER
+    )
+    return f"""
+<section class="section-order-panel" data-section-order-panel aria-label="栏目顺序">
+  <div class="section-order-head">
+    <div>
+      <h2 class="section-order-title">栏目顺序</h2>
+      <p class="section-order-subtitle">本机保存</p>
+    </div>
+    <div class="section-order-actions">
+      <button type="button" class="section-order-reset" data-section-order-reset>恢复默认</button>
+      <button type="button" class="section-order-save" data-section-order-save>确定并刷新</button>
+    </div>
+  </div>
+  <ol class="section-order-list" data-section-order-list>
+{items}
+  </ol>
+</section>
+{SECTION_ORDER_PANEL_SCRIPT}
+"""
+
+
+def insert_section_order_panel(html_text: str) -> str:
+    if SECTION_ORDER_PANEL_MARKER in html_text:
+        return html_text
+
+    refresh_panel = re.search(r'\s*<section class="refresh-panel" id="refresh-panel"', html_text)
+    if refresh_panel:
+        panel = render_section_order_panel()
+        insert_at = refresh_panel.start()
+        return html_text[:insert_at] + "\n" + panel + html_text[insert_at:]
+
+    first_section = DETAILS_PATTERN.search(html_text)
+    if first_section:
+        panel = render_section_order_panel()
+        return html_text[: first_section.start()] + panel + html_text[first_section.start() :]
+    return html_text
 
 
 def value_tone_class(text: str) -> str:
@@ -160,6 +443,7 @@ def render_ths_curve_summary(return_rate: str) -> str:
                 <span class="ths-curve-row-label">辅助功能</span>
                 <div class="ths-curve-assist-list" aria-label="收益曲线辅助功能">
                   <button type="button" class="ths-curve-assist" data-curve-assist="extreme" aria-pressed="false"><i></i>极值分析</button>
+                  <button type="button" class="ths-curve-assist" data-curve-assist="growth" aria-pressed="false"><i></i>最大增长</button>
                   <button type="button" class="ths-curve-assist is-active" data-curve-assist="drawdown" aria-pressed="true"><i></i>最大回撤</button>
                 </div>
               </div>
@@ -198,7 +482,7 @@ def apply_tonghuashun_curve_style(html_text: str) -> str:
     )
     section = re.sub(
         r'<p class="section-note">.*?</p>',
-        '<p class="section-note">红线为历史每天的总盈亏：截至当天已实现盈亏 + 当天仍持仓的收盘浮盈/浮亏；买入当天只记入持仓基准，下一组可比收盘点开始贡献波动。港币和美元按当前汇率折成人民币后合并展示，蓝线对比上证指数。</p>',
+        '<p class="section-note">红线为历史每天的总盈亏：截至当天已实现盈亏 + 当天仍持仓的收盘浮盈/浮亏；收益率用截至当日历史最高持仓本金近似总资产基准，避免清仓换仓时分母突然变小。港币和美元按当前汇率折成人民币后合并展示，蓝线对比上证指数。</p>',
         section,
         count=1,
         flags=re.S,

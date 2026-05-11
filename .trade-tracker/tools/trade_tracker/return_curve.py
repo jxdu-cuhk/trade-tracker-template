@@ -8,13 +8,14 @@ from urllib.error import URLError
 from urllib.parse import urlencode
 from urllib.request import Request, urlopen
 
+from .historical_curve import fetch_tencent_history_points
 from .market_data import current_fx_rates_to_cny
 from .runtime import APP_DIR
 from .utils import clean_text, parse_float
 
 COMBINED_CURRENCY = "人民币折算"
 COMBINED_CODE = "CNY"
-COMBINED_BENCHMARK = {"label": "上证指数", "secid": "1.000001"}
+COMBINED_BENCHMARK = {"label": "上证指数", "secid": "1.000001", "tencent": "sh000001"}
 BENCHMARK_TIMEOUT = 8
 BENCHMARK_CACHE_PATH = APP_DIR / "tools" / "cache" / "benchmark_history.json"
 BENCHMARK_CACHE_TTL_DAYS = 7
@@ -84,7 +85,43 @@ def is_cache_entry_fresh(entry: object) -> bool:
     return (date.today() - fetched_at).days <= BENCHMARK_CACHE_TTL_DAYS
 
 
-def fetch_benchmark_points_online(secid: str, start_iso: str, end_iso: str) -> list[dict[str, object]]:
+def benchmark_tencent_symbol(secid: str) -> str:
+    if secid == COMBINED_BENCHMARK["secid"]:
+        return clean_text(COMBINED_BENCHMARK.get("tencent"))
+    return {
+        "0.399001": "sz399001",
+        "0.399006": "sz399006",
+        "1.000001": "sh000001",
+        "1.000300": "sh000300",
+    }.get(clean_text(secid), "")
+
+
+def fetch_tencent_benchmark_points(symbol: str, start_iso: str, end_iso: str) -> list[dict[str, object]]:
+    symbol = clean_text(symbol)
+    if not symbol or not start_iso or not end_iso:
+        return []
+    try:
+        start = date.fromisoformat(start_iso)
+        end = date.fromisoformat(end_iso)
+    except ValueError:
+        return []
+    points = []
+    for point in fetch_tencent_history_points(symbol, start, end):
+        serial = excel_serial_from_iso(point.iso)
+        if serial is None:
+            continue
+        points.append(
+            {
+                "date": date_label_from_iso(point.iso),
+                "iso": point.iso,
+                "serial": serial,
+                "close": point.close,
+            }
+        )
+    return points
+
+
+def fetch_eastmoney_benchmark_points(secid: str, start_iso: str, end_iso: str) -> list[dict[str, object]]:
     if not secid or not start_iso or not end_iso:
         return []
     params = {
@@ -123,6 +160,13 @@ def fetch_benchmark_points_online(secid: str, start_iso: str, end_iso: str) -> l
             }
         )
     return points
+
+
+def fetch_benchmark_points_online(secid: str, start_iso: str, end_iso: str) -> list[dict[str, object]]:
+    points = fetch_tencent_benchmark_points(benchmark_tencent_symbol(secid), start_iso, end_iso)
+    if points:
+        return points
+    return fetch_eastmoney_benchmark_points(secid, start_iso, end_iso)
 
 
 def fetch_benchmark_points(secid: str, start_iso: str, end_iso: str) -> list[dict[str, object]]:
@@ -324,16 +368,23 @@ def render_curve_card(index: int, series: dict[str, object]) -> str:
                     </g>
                     <line class="curve-zero-line" x1="34" y1="282" x2="564" y2="282" data-curve-zero-line></line>
                     <rect class="curve-drawdown-band" data-curve-drawdown-band></rect>
+                    <rect class="curve-growth-band" data-curve-growth-band></rect>
                     <path class="curve-benchmark-line" data-curve-benchmark-line></path>
                     <path class="curve-area" data-curve-area></path>
                     <path class="curve-line-glow" data-curve-line-glow></path>
                     <path class="curve-line" data-curve-line></path>
                     <path class="curve-drawdown-link" data-curve-drawdown-link></path>
+                    <path class="curve-growth-link" data-curve-growth-link></path>
                     <g data-curve-dots></g>
                     <g class="curve-drawdown-layer" data-curve-drawdown-layer>
                       <circle class="curve-drawdown-marker curve-drawdown-peak" data-curve-drawdown-peak></circle>
                       <circle class="curve-drawdown-marker curve-drawdown-trough" data-curve-drawdown-trough></circle>
                       <text class="curve-drawdown-label" data-curve-drawdown-label>--</text>
+                    </g>
+                    <g class="curve-growth-layer" data-curve-growth-layer>
+                      <circle class="curve-growth-marker curve-growth-trough" data-curve-growth-trough></circle>
+                      <circle class="curve-growth-marker curve-growth-peak" data-curve-growth-peak></circle>
+                      <text class="curve-growth-label" data-curve-growth-label>--</text>
                     </g>
                     <g class="curve-hover-layer" data-curve-hover-layer>
                       <line class="curve-hover-line" data-curve-hover-line></line>
@@ -347,6 +398,7 @@ def render_curve_card(index: int, series: dict[str, object]) -> str:
                   </svg>
                   <div class="curve-tooltip" data-curve-tooltip hidden></div>
                   <div class="curve-risk-caption" data-curve-drawdown-caption hidden></div>
+                  <div class="curve-risk-caption curve-growth-caption" data-curve-growth-caption hidden></div>
                 </div>
 """
 
@@ -662,6 +714,7 @@ def render_curve_script(payload: list[dict[str, object]]) -> str:
                     return {{
                       drawdown: isActive('drawdown'),
                       extreme: isActive('extreme'),
+                      growth: isActive('growth'),
                     }};
                   }}
 
@@ -725,10 +778,49 @@ def render_curve_script(payload: list[dict[str, object]]) -> str:
                       }});
                       if (recovery) {{
                         result.recovery = recovery;
-                        result.recoveryDays = daysBetween(result.trough, recovery);
+                        const latestPoint = (points || [])[points.length - 1];
+                        result.recoveredDays = Math.max(1, daysBetween(recovery, latestPoint) + 1);
                       }}
                     }}
                     return result && result.primaryDrop < 0 ? result : null;
+                  }}
+
+                  function maxGrowthFor(points, metric) {{
+                    const mode = metric === 'amount' ? 'amount' : 'return';
+                    let trough = null;
+                    let result = null;
+                    (points || []).forEach((point, index) => {{
+                      const nav = drawdownNav(point);
+                      const amount = Number(point?.amountValue || 0);
+                      const primary = mode === 'amount' ? amount : nav;
+                      if (!Number.isFinite(primary)) return;
+                      if (mode === 'return' && primary <= 0) return;
+                      if (!trough || primary < trough.primary) {{
+                        trough = {{ point, index, nav, amount, primary }};
+                      }}
+                      if (!trough || index <= trough.index) return;
+                      const amountGain = amount - trough.amount;
+                      const rateGain = drawdownRateBetween(trough.point, point);
+                      const primaryGain = mode === 'amount' ? amountGain : rateGain;
+                      if (Number.isFinite(primaryGain) && primaryGain > 0 && (!result || primaryGain > result.primaryGain)) {{
+                        result = {{
+                          trough: trough.point,
+                          peak: point,
+                          troughIndex: trough.index,
+                          peakIndex: index,
+                          amount: amountGain,
+                          rate: rateGain,
+                          primaryGain,
+                          mode,
+                          troughNav: trough.nav,
+                          peakNav: nav,
+                          troughAmount: trough.amount,
+                          peakAmount: amount,
+                        }};
+                      }}
+                    }});
+                    if (result) result.durationDays = daysBetween(result.trough, result.peak);
+                    return result && result.primaryGain > 0 ? result : null;
                   }}
 
                   function installHoverHandlers(card) {{
@@ -818,10 +910,19 @@ def render_curve_script(payload: list[dict[str, object]]) -> str:
                     const capital = Number(series.capital) > 0
                       ? Number(series.capital)
                       : Math.max(Math.abs(Number(points[points.length - 1]?.value || 0)), 1);
+                    const carriedCapitalByIso = new Map();
+                    let carriedCapital = 0;
+                    (series.points || []).forEach((point) => {{
+                      const pointCapital = Number(point?.capital);
+                      if (Number.isFinite(pointCapital) && pointCapital > carriedCapital) carriedCapital = pointCapital;
+                      if (point?.iso && carriedCapital > 0) carriedCapitalByIso.set(point.iso, carriedCapital);
+                    }});
                     function capitalForPoint(point) {{
+                      const carried = carriedCapitalByIso.get(point?.iso);
+                      if (Number.isFinite(carried) && carried > 0) return carried;
                       if (point && Object.prototype.hasOwnProperty.call(point, 'capital')) {{
                         const pointCapital = Number(point.capital);
-                        if (Number.isFinite(pointCapital) && pointCapital >= 0) return pointCapital;
+                        if (Number.isFinite(pointCapital) && pointCapital > 0) return pointCapital;
                       }}
                       return capital;
                     }}
@@ -928,6 +1029,7 @@ def render_curve_script(payload: list[dict[str, object]]) -> str:
                       ? Number(periodPnl) - Number(periodBenchmarkAmount)
                       : NaN;
                     const drawdown = assists.drawdown ? maxDrawdownFor(accountValues, metric) : null;
+                    const growth = assists.growth ? maxGrowthFor(accountValues, metric) : null;
                     const areaPath = `${{linePath}} L ${{lastPos[0].toFixed(2)}} ${{zeroY.toFixed(2)}} L ${{firstPos[0].toFixed(2)}} ${{zeroY.toFixed(2)}} Z`;
 
                     const gridLines = card.querySelector('[data-curve-grid-lines]');
@@ -1001,6 +1103,13 @@ def render_curve_script(payload: list[dict[str, object]]) -> str:
                     const drawdownTrough = card.querySelector('[data-curve-drawdown-trough]');
                     const drawdownLabel = card.querySelector('[data-curve-drawdown-label]');
                     const drawdownCaption = card.querySelector('[data-curve-drawdown-caption]');
+                    const growthBand = card.querySelector('[data-curve-growth-band]');
+                    const growthLink = card.querySelector('[data-curve-growth-link]');
+                    const growthLayer = card.querySelector('[data-curve-growth-layer]');
+                    const growthPeak = card.querySelector('[data-curve-growth-peak]');
+                    const growthTrough = card.querySelector('[data-curve-growth-trough]');
+                    const growthLabel = card.querySelector('[data-curve-growth-label]');
+                    const growthCaption = card.querySelector('[data-curve-growth-caption]');
                     const area = card.querySelector('[data-curve-area]');
                     const zero = card.querySelector('[data-curve-zero-line]');
                     if (line) line.setAttribute('d', linePath);
@@ -1045,7 +1154,7 @@ def render_curve_script(payload: list[dict[str, object]]) -> str:
                       }}
                       if (drawdownCaption) {{
                         const recoveryText = drawdown.recovery
-                          ? `已修复 ${{daysText(drawdown.recoveryDays)}}`
+                          ? `已修复 ${{daysText(drawdown.recoveredDays)}}`
                           : '尚未修复';
                         const primaryLabel = metric === 'amount' ? '利润最大回撤' : '收益率最大回撤';
                         const primaryText = metric === 'amount' ? signedMoneyText(drawdown.amount) : percentText(drawdown.rate);
@@ -1055,7 +1164,7 @@ def render_curve_script(payload: list[dict[str, object]]) -> str:
                           <span><em>${{primaryLabel}}</em><strong>${{primaryText}}</strong></span>
                           <span><em>${{secondaryLabel}}</em><strong>${{secondaryText}}</strong></span>
                           <span><em>回撤区间</em><strong>${{drawdown.peak.date}} 至 ${{drawdown.trough.date}} · ${{daysText(drawdown.durationDays)}}</strong></span>
-                          <span><em>修复情况</em><strong>${{recoveryText}}</strong></span>
+                          <span><em>已修复天数</em><strong>${{recoveryText}}</strong></span>
                         `;
                         drawdownCaption.hidden = false;
                       }}
@@ -1067,6 +1176,63 @@ def render_curve_script(payload: list[dict[str, object]]) -> str:
                       setSvgHidden(drawdownLink, true);
                       setSvgHidden(drawdownLayer, true);
                       if (drawdownCaption) drawdownCaption.hidden = true;
+                    }}
+                    if (growth && positions[growth.troughIndex] && positions[growth.peakIndex]) {{
+                      const troughPos = positions[growth.troughIndex];
+                      const peakPos = positions[growth.peakIndex];
+                      const startX = Math.min(troughPos[0], peakPos[0]);
+                      const endX = Math.max(troughPos[0], peakPos[0]);
+                      if (growthBand) {{
+                        growthBand.setAttribute('x', startX.toFixed(2));
+                        growthBand.setAttribute('y', String(dims.top));
+                        growthBand.setAttribute('width', Math.max(2, endX - startX).toFixed(2));
+                        growthBand.setAttribute('height', String(dims.innerHeight));
+                      }}
+                      if (growthLink) {{
+                        growthLink.setAttribute(
+                          'd',
+                          `M ${{troughPos[0].toFixed(2)}} ${{troughPos[1].toFixed(2)}} L ${{peakPos[0].toFixed(2)}} ${{peakPos[1].toFixed(2)}}`
+                        );
+                      }}
+                      if (growthTrough) {{
+                        growthTrough.setAttribute('cx', troughPos[0].toFixed(2));
+                        growthTrough.setAttribute('cy', troughPos[1].toFixed(2));
+                        growthTrough.setAttribute('r', '3.8');
+                      }}
+                      if (growthPeak) {{
+                        growthPeak.setAttribute('cx', peakPos[0].toFixed(2));
+                        growthPeak.setAttribute('cy', peakPos[1].toFixed(2));
+                        growthPeak.setAttribute('r', '3.8');
+                      }}
+                      if (growthLabel) {{
+                        const labelText = metric === 'amount' ? signedMoneyText(growth.amount) : percentText(growth.rate);
+                        const labelX = Math.max(dims.left + 8, Math.min(dims.width - dims.right - 8, peakPos[0] + 6));
+                        const labelY = Math.max(dims.top + 14, Math.min(dims.top + dims.innerHeight - 4, peakPos[1] - 8));
+                        growthLabel.setAttribute('x', labelX.toFixed(2));
+                        growthLabel.setAttribute('y', labelY.toFixed(2));
+                        growthLabel.setAttribute('text-anchor', 'start');
+                        growthLabel.textContent = labelText;
+                      }}
+                      if (growthCaption) {{
+                        const primaryLabel = metric === 'amount' ? '利润最大增长' : '收益率最大增长';
+                        const primaryText = metric === 'amount' ? signedMoneyText(growth.amount) : percentText(growth.rate);
+                        const secondaryLabel = metric === 'amount' ? '对应收益率增长' : '对应利润增长';
+                        const secondaryText = metric === 'amount' ? percentText(growth.rate) : signedMoneyText(growth.amount);
+                        growthCaption.innerHTML = `
+                          <span><em>${{primaryLabel}}</em><strong>${{primaryText}}</strong></span>
+                          <span><em>${{secondaryLabel}}</em><strong>${{secondaryText}}</strong></span>
+                          <span><em>增长区间</em><strong>${{growth.trough.date}} 至 ${{growth.peak.date}} · ${{daysText(growth.durationDays)}}</strong></span>
+                        `;
+                        growthCaption.hidden = false;
+                      }}
+                      setSvgHidden(growthBand, false);
+                      setSvgHidden(growthLink, false);
+                      setSvgHidden(growthLayer, false);
+                    }} else {{
+                      setSvgHidden(growthBand, true);
+                      setSvgHidden(growthLink, true);
+                      setSvgHidden(growthLayer, true);
+                      if (growthCaption) growthCaption.hidden = true;
                     }}
                     if (zero) {{
                       zero.setAttribute('x1', String(dims.left));

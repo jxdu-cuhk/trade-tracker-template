@@ -8,6 +8,7 @@ from datetime import date, timedelta
 from .historical_curve import build_stock_lots, close_for_day, fetch_histories_for_lots, unrealized_pnl
 from .html_tables import body_rows, cell_text, money_for_label, summary_table_match, table_labels, text_for_label
 from .market_data import current_fx_rates_to_cny, display_currency_label
+from .options import build_open_short_put_exposure_maps
 from .realized_analysis import build_realized_trades
 from .utils import clean_text
 
@@ -56,7 +57,21 @@ def cny_value(core, labels: list[str], cells: list[str], label: str, rates: dict
     return abs(converted) if absolute else converted
 
 
-def holdings_metrics_from_table(core, table_html: str) -> dict[str, float]:
+def open_short_put_reserve_cny(core, rows: list[tuple[int, dict[int, object]]] | None, rates: dict[str, float]) -> float:
+    if not rows:
+        return 0.0
+    try:
+        exposures = build_open_short_put_exposure_maps(core, rows)
+    except Exception:
+        return 0.0
+    total = 0.0
+    for exposure in exposures.values():
+        currency = clean_text(exposure.get("currency") or "")
+        total += abs(float(exposure.get("capital") or 0.0)) * rates.get(currency, 1.0)
+    return total
+
+
+def holdings_metrics_from_table(core, table_html: str, rows: list[tuple[int, dict[int, object]]] | None = None) -> dict[str, float]:
     labels = table_labels(table_html)
     if not labels:
         return {}
@@ -88,6 +103,7 @@ def holdings_metrics_from_table(core, table_html: str) -> dict[str, float]:
             totals["float_pnl"] += float_pnl
         if daily_pnl is not None:
             totals["daily_pnl"] += daily_pnl
+    totals["asset"] -= open_short_put_reserve_cny(core, rows, rates)
     totals["count"] = float(count)
     return totals
 
@@ -240,7 +256,7 @@ def reference_float_metrics(core, rows: list[tuple[int, dict[int, object]]], met
     daily_base = abs(asset - daily_pnl) if asset is not None and daily_pnl is not None else None
     ranges = {
         "day": {
-            "label": "当日参考盈亏",
+            "label": "当日持仓浮盈变动",
             "pnl": daily_pnl or 0.0,
             "capital": daily_base or cost or 0.0,
             "rate": daily_pnl / daily_base if daily_base else None,
@@ -255,9 +271,9 @@ def reference_float_metrics(core, rows: list[tuple[int, dict[int, object]]], met
         rates = current_fx_rates_to_cny()
         histories = fetch_histories_for_lots(core, lots)
         for key, label, start in [
-            ("month", f"{today.month}月参考盈亏", date(today.year, today.month, 1)),
-            ("three-month", "近三月参考盈亏", shift_months(today, -3)),
-            ("year", "本年参考盈亏", date(today.year, 1, 1)),
+            ("month", f"{today.month}月现持仓浮盈", date(today.year, today.month, 1)),
+            ("three-month", "近三月现持仓浮盈", shift_months(today, -3)),
+            ("year", "本年现持仓浮盈", date(today.year, 1, 1)),
         ]:
             ranges[key] = summarize_reference_range(
                 key,
@@ -393,7 +409,7 @@ def render_reference_panel(key: str, data: dict[str, object], active: bool = Fal
     pnl = float(data.get("pnl") or 0.0)
     rate = data.get("rate") if isinstance(data.get("rate"), (int, float)) else None
     points = list(data.get("points") or [])
-    label = str(data.get("label") or "参考盈亏")
+    label = str(data.get("label") or "现持仓浮盈")
     active_class = " is-active" if active else ""
     return (
         f'<div class="holdings-realized-range{active_class}" data-holdings-range-panel="{html.escape(key)}">'
@@ -426,8 +442,8 @@ def render_reference_metric(reference: dict[str, object]) -> str:
     return (
         '<div class="holdings-account-metric holdings-month-metric" data-holdings-reference-card data-holdings-range-card>'
         '<div class="holdings-realized-head">'
-        '<span class="holdings-month-label">参考</span>'
-        f'<div class="holdings-range-tabs" aria-label="选择参考盈亏区间">{buttons}</div>'
+        '<span class="holdings-month-label">现持仓浮盈</span>'
+        f'<div class="holdings-range-tabs" aria-label="选择现持仓浮盈区间">{buttons}</div>'
         '</div>'
         f"{panels}"
         "</div>"
@@ -470,9 +486,9 @@ def render_holdings_account_panel(metrics: dict[str, float], month: dict[str, ob
     return f"""
             <div class="holdings-account-panel">
               <div class="holdings-account-grid">
-                {render_metric("持仓总资产", format_money(asset), "", "折人民币，不含现金")}
+                {render_metric("持仓总资产", format_money(asset), "", "折人民币，不含现金和卖出认沽占用")}
                 {render_metric("总盈亏", format_signed_money(float_pnl), tone_class(float_pnl), format_percent(float_rate))}
-                {render_metric("总市值", format_money(market_value), "", "按仓位绝对值")}
+                {render_metric("总市值", format_money(market_value), "", "按仓位绝对值，含卖出认沽占用")}
                 {reference_metric}
                 {month_metric}
               </div>
@@ -493,7 +509,7 @@ def insert_holdings_account_overview(core, html_text: str, rows: list[tuple[int,
     insertion_index = html_text.find('<div class="summary-wrap">', title_index)
     if insertion_index < 0 or insertion_index > table_match.start():
         return html_text
-    metrics = holdings_metrics_from_table(core, table_match.group(0))
+    metrics = holdings_metrics_from_table(core, table_match.group(0), rows)
     month = realized_range_metrics(core, rows)
     reference = reference_float_metrics(core, rows, metrics)
     panel = render_holdings_account_panel(metrics, month, reference)

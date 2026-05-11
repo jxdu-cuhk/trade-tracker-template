@@ -30,6 +30,7 @@ from trade_tracker.market_data import (
 from trade_tracker.html_tables import (
     add_balanced_summary_table_script,
     add_holdings_cny_settlement_footer_script,
+    align_annual_summary_with_stock_summary,
     insert_holding_metric_columns,
     normalize_legacy_holdings_table,
     normalize_legacy_open_option_table,
@@ -98,6 +99,44 @@ class FakeCore:
 
 
 class RealizedCostAdjustmentTests(unittest.TestCase):
+    def test_annual_summary_assigns_stock_to_final_clear_year(self):
+        stock_table = """
+        <table class="summary-table" data-summary-kind="stock">
+          <thead><tr>
+            <th>最后清仓时间</th><th>代码</th><th>名称</th><th>已实现盈亏</th><th>总盈亏</th>
+            <th>总收益率</th><th>综合年化</th><th>持有天数</th><th>持仓浮盈亏</th><th>分红净额</th>
+            <th>已平仓笔数</th><th>币种</th><th>当前方向</th><th>当前仓位</th>
+          </tr></thead>
+          <tbody>
+            <tr data-capital="439280.91" data-capital-days="18449798.22" data-total-pnl="137389.480866">
+              <td class="text">2026/01/08</td><td class="text">688017</td><td class="text">绿的谐波</td>
+              <td class="money value-positive">137,389.48</td><td class="money value-positive">137,389.48</td>
+              <td class="percent value-positive">31.28%</td><td class="percent value-positive">271.80%</td>
+              <td class="num" data-sort-value="42">42</td><td class="money">--</td><td class="money value-zero">0.00</td>
+              <td class="num">1</td><td class="ccy">人民币</td><td class="text">--</td><td class="num">--</td>
+            </tr>
+          </tbody>
+        </table>
+        """
+        annual_table = """
+        <table class="summary-table annual-summary-table" data-summary-kind="annual">
+          <thead><tr><th>年份</th><th>代码</th><th>名称</th><th>总盈亏</th><th>币种</th></tr></thead>
+          <tbody>
+            <tr data-year="2025" data-total-pnl="137389.480866">
+              <td class="text">2025</td><td class="text">688017</td><td class="text">绿的谐波</td>
+              <td class="money value-positive">137,389.48</td><td class="ccy">人民币</td>
+            </tr>
+          </tbody>
+        </table>
+        """
+
+        updated = align_annual_summary_with_stock_summary(stock_table + annual_table)
+
+        self.assertIn('data-year="total"', updated)
+        self.assertIn('data-year="2026"', updated)
+        self.assertIn("<td class=\"text\">2026</td><td class=\"text\">2026/01/08</td><td class=\"text\">688017</td>", updated)
+        self.assertNotRegex(updated, r'(?s)data-year="2025"[^>]*>.*?688017')
+
     def test_closed_stock_rows_are_grouped_by_ticker_and_currency(self):
         rows = [
             (

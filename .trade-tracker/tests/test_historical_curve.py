@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import json
 import sys
 import tempfile
 import unittest
@@ -14,6 +15,7 @@ TOOLS_DIR = Path(__file__).resolve().parents[1] / "tools"
 sys.path.insert(0, str(TOOLS_DIR))
 
 import trade_tracker.historical_curve as historical_curve_module  # noqa: E402
+from trade_tracker import state  # noqa: E402
 from trade_tracker.historical_curve import (  # noqa: E402
     SecurityHistoryPoint,
     fetch_security_history_points_online,
@@ -51,6 +53,11 @@ class FakeCore:
 class ImportedAggregateCore(FakeCore):
     def compute_row_metrics(self, _cells):
         return {"pnl": -109637.67, "capital": 1001.0, "days": 4}
+
+
+class ClosedLossCore(FakeCore):
+    def compute_row_metrics(self, _cells):
+        return {"pnl": -485.9, "capital": 24106.06, "days": 5}
 
 
 def stock_row(**overrides):
@@ -119,6 +126,45 @@ class HistoricalCurveTests(unittest.TestCase):
         self.assertAlmostEqual(values_by_iso["2026-05-02"], 19.0)
         self.assertAlmostEqual(values_by_iso["2026-05-05"], 29.0)
 
+    def test_performance_stock_payload_includes_open_holding_float(self):
+        row = stock_row()
+        row[4] = Cell(None)
+        row[10] = Cell(None)
+        rows = [(2, row)]
+        history = [
+            SecurityHistoryPoint("2026-05-01", 100.0),
+            SecurityHistoryPoint("2026-05-02", 110.0),
+            SecurityHistoryPoint("2026-05-08", 112.0),
+        ]
+        with tempfile.TemporaryDirectory() as temp_dir:
+            cache_path = Path(temp_dir) / "security_history.json"
+            with (
+                patch.object(historical_curve_module, "HISTORY_CACHE_PATH", cache_path),
+                patch("trade_tracker.historical_curve.fetch_security_history_points_online", return_value=history),
+                patch("trade_tracker.historical_curve.current_fx_rates_to_cny", return_value={"人民币": 1.0}),
+            ):
+                replace_curve_series_with_historical_prices(
+                    FakeCore(),
+                    rows,
+                    {
+                        "curve_series": [],
+                        "holdings": [
+                            {
+                                "ticker": "600000",
+                                "currency": "人民币",
+                                "name": "浦发银行",
+                                "last_price": "112.00",
+                            }
+                        ],
+                    },
+                )
+
+        may_items = state.PERFORMANCE_STOCK_PAYLOAD["months"]["2026-05"]
+        item = next(item for item in may_items if item["code"] == "600000")
+        self.assertEqual(item["name"], "浦发银行")
+        self.assertEqual(item["currency"], "人民币")
+        self.assertAlmostEqual(item["pnl"], 119.0)
+
     def test_holding_float_uses_trade_cost_as_curve_baseline(self):
         row = stock_row()
         row[4] = Cell(date(2026, 5, 6))
@@ -140,6 +186,187 @@ class HistoricalCurveTests(unittest.TestCase):
         values_by_iso = {point["iso"]: point["value"] for point in data["curve_series"][0]["points"]}
         self.assertAlmostEqual(values_by_iso["2026-05-01"], 0.0)
         self.assertAlmostEqual(values_by_iso["2026-05-02"], 209.0)
+
+    def test_adjusted_history_prices_do_not_create_false_monthly_profit(self):
+        row = stock_row()
+        for column, value in {
+            2: date(2023, 10, 27),
+            4: date(2023, 11, 1),
+            5: "002594",
+            8: 100,
+            9: 241.04,
+            10: 236.34,
+            11: 15.9,
+            12: 24106.06,
+        }.items():
+            row[column] = Cell(value)
+        rows = [(238, row)]
+        adjusted_history = [
+            SecurityHistoryPoint("2023-10-27", 78.293),
+            SecurityHistoryPoint("2023-10-31", 77.156),
+            SecurityHistoryPoint("2023-11-01", 76.376),
+        ]
+        with tempfile.TemporaryDirectory() as temp_dir:
+            cache_path = Path(temp_dir) / "security_history.json"
+            with (
+                patch.object(historical_curve_module, "HISTORY_CACHE_PATH", cache_path),
+                patch("trade_tracker.historical_curve.fetch_security_history_points_online", return_value=adjusted_history),
+                patch("trade_tracker.historical_curve.current_fx_rates_to_cny", return_value={"人民币": 1.0}),
+            ):
+                replace_curve_series_with_historical_prices(ClosedLossCore(), rows, {"curve_series": []})
+
+        november_item = next(item for item in state.PERFORMANCE_STOCK_PAYLOAD["months"]["2023-11"] if item["code"] == "002594")
+        self.assertLess(november_item["pnl"], 0)
+        self.assertLess(abs(november_item["pnl"]), 1000)
+
+    def test_adjusted_cached_history_is_refetched_on_trade_scale_mismatch(self):
+        row = stock_row()
+        for column, value in {
+            2: date(2023, 10, 27),
+            4: date(2023, 11, 1),
+            5: "002594",
+            8: 100,
+            9: 241.04,
+            10: 236.34,
+            11: 15.9,
+            12: 24106.06,
+        }.items():
+            row[column] = Cell(value)
+        rows = [(238, row)]
+        adjusted_cache_points = [
+            {"iso": "2023-10-27", "close": 78.293},
+            {"iso": "2023-10-31", "close": 77.156},
+            {"iso": "2023-11-01", "close": 76.376},
+        ]
+        unadjusted_history = [
+            SecurityHistoryPoint("2023-10-27", 241.95),
+            SecurityHistoryPoint("2023-10-31", 238.54),
+            SecurityHistoryPoint("2023-11-01", 236.2),
+        ]
+        with tempfile.TemporaryDirectory() as temp_dir:
+            cache_path = Path(temp_dir) / "security_history.json"
+            cache_path.write_text(
+                json.dumps(
+                    {
+                        "version": 1,
+                        "securities": {
+                            "CNY|002594": {
+                                "ticker": "002594",
+                                "currency": "CNY",
+                                "fetched_at": date.today().isoformat(),
+                                "points": adjusted_cache_points,
+                            }
+                        },
+                    }
+                ),
+                encoding="utf-8",
+            )
+            with (
+                patch.object(historical_curve_module, "HISTORY_CACHE_PATH", cache_path),
+                patch("trade_tracker.historical_curve.fetch_security_history_points_online", return_value=unadjusted_history) as fetch_online,
+                patch("trade_tracker.historical_curve.current_fx_rates_to_cny", return_value={"人民币": 1.0}),
+            ):
+                replace_curve_series_with_historical_prices(ClosedLossCore(), rows, {"curve_series": []})
+
+            refreshed = json.loads(cache_path.read_text(encoding="utf-8"))["securities"]["CNY|002594"]
+
+        fetch_online.assert_called_once()
+        self.assertEqual(refreshed["points"][0]["close"], 241.95)
+        self.assertFalse(refreshed["price_scale_mismatch"])
+
+    def test_consistent_adjusted_cached_history_near_threshold_is_refetched(self):
+        row = stock_row()
+        for column, value in {
+            2: date(2024, 4, 15),
+            4: date(2024, 10, 9),
+            5: "001223",
+            8: 100,
+            9: 38.89,
+            10: 40.24,
+            11: 12.0,
+            12: 3889.0,
+        }.items():
+            row[column] = Cell(value)
+        rows = [(300, row)]
+        adjusted_cache_points = [
+            {"iso": "2024-04-15", "close": 25.714},
+            {"iso": "2024-10-09", "close": 27.793},
+        ]
+        unadjusted_history = [
+            SecurityHistoryPoint("2024-04-15", 36.95),
+            SecurityHistoryPoint("2024-10-09", 39.06),
+        ]
+        with tempfile.TemporaryDirectory() as temp_dir:
+            cache_path = Path(temp_dir) / "security_history.json"
+            cache_path.write_text(
+                json.dumps(
+                    {
+                        "version": 1,
+                        "securities": {
+                            "CNY|001223": {
+                                "ticker": "001223",
+                                "currency": "CNY",
+                                "fetched_at": date.today().isoformat(),
+                                "points": adjusted_cache_points,
+                            }
+                        },
+                    }
+                ),
+                encoding="utf-8",
+            )
+            with (
+                patch.object(historical_curve_module, "HISTORY_CACHE_PATH", cache_path),
+                patch("trade_tracker.historical_curve.fetch_security_history_points_online", return_value=unadjusted_history) as fetch_online,
+                patch("trade_tracker.historical_curve.current_fx_rates_to_cny", return_value={"人民币": 1.0}),
+            ):
+                replace_curve_series_with_historical_prices(FakeCore(), rows, {"curve_series": []})
+
+            refreshed = json.loads(cache_path.read_text(encoding="utf-8"))["securities"]["CNY|001223"]
+
+        fetch_online.assert_called_once()
+        self.assertEqual(refreshed["points"][0]["close"], 36.95)
+        self.assertFalse(refreshed["price_scale_mismatch"])
+
+    def test_same_day_trade_price_difference_does_not_force_scale_refresh(self):
+        row = stock_row()
+        for column, value in {
+            2: date(2026, 3, 17),
+            4: date(2026, 3, 17),
+            5: "01428",
+            8: 2000,
+            9: 16.05,
+            10: 15.8,
+            11: 12.0,
+            12: 32100.0,
+            20: "港币",
+        }.items():
+            row[column] = Cell(value)
+        rows = [(400, row)]
+        with tempfile.TemporaryDirectory() as temp_dir:
+            cache_path = Path(temp_dir) / "security_history.json"
+            cache_path.write_text(
+                json.dumps(
+                    {
+                        "version": 1,
+                        "securities": {
+                            "HKD|01428": {
+                                "ticker": "01428",
+                                "currency": "HKD",
+                                "fetched_at": date.today().isoformat(),
+                                "points": [{"iso": "2026-03-17", "close": 13.6}],
+                            }
+                        },
+                    }
+                ),
+                encoding="utf-8",
+            )
+            with (
+                patch.object(historical_curve_module, "HISTORY_CACHE_PATH", cache_path),
+                patch("trade_tracker.historical_curve.fetch_security_history_points_online", return_value=[]) as fetch_online,
+            ):
+                replace_curve_series_with_historical_prices(FakeCore(), rows, {"curve_series": []})
+
+        fetch_online.assert_not_called()
 
     def test_imported_closed_rows_use_raw_trade_lots_for_active_capital(self):
         aggregate_row = stock_row()

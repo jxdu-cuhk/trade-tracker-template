@@ -7,6 +7,7 @@ import tempfile
 import unittest
 from datetime import date
 from pathlib import Path
+from types import SimpleNamespace
 from unittest.mock import patch
 
 
@@ -121,18 +122,29 @@ class ReturnCurveTests(unittest.TestCase):
         self.assertIn("activeAssists", html)
         self.assertIn("root.addEventListener('click'", html)
         self.assertIn("maxDrawdownFor", html)
+        self.assertIn("maxGrowthFor", html)
         self.assertIn("data-curve-drawdown-band", html)
+        self.assertIn("data-curve-growth-band", html)
         self.assertIn("data-curve-drawdown-link", html)
+        self.assertIn("data-curve-growth-link", html)
         self.assertIn("data-curve-drawdown-label", html)
+        self.assertIn("data-curve-growth-label", html)
         self.assertIn("data-curve-drawdown-caption", html)
+        self.assertIn("data-curve-growth-caption", html)
         self.assertIn("data-curve-extreme-layer", html)
         self.assertIn("data-curve-extreme-max-label", html)
         self.assertIn("收益率最大回撤", html)
         self.assertIn("利润最大回撤", html)
+        self.assertIn("收益率最大增长", html)
+        self.assertIn("利润最大增长", html)
         self.assertIn("对应收益率回撤", html)
         self.assertIn("对应利润回撤", html)
+        self.assertIn("对应收益率增长", html)
+        self.assertIn("对应利润增长", html)
         self.assertIn("回撤区间", html)
-        self.assertIn("修复情况", html)
+        self.assertIn("增长区间", html)
+        self.assertIn("已修复天数", html)
+        self.assertIn("recoveredDays", html)
         self.assertIn("niceScale", html)
         self.assertIn("dataset.excessReturn", html)
         self.assertIn("dataset.excessAmount", html)
@@ -167,6 +179,29 @@ class ReturnCurveTests(unittest.TestCase):
 
         self.assertEqual(points, cached_points)
         fetch_online.assert_not_called()
+
+    def test_fetch_tencent_benchmark_points_converts_history_points(self):
+        history_point = SimpleNamespace(iso="2026-05-07", close=3100.5)
+        with patch.object(return_curve_module, "fetch_tencent_history_points", return_value=[history_point]) as fetch_history:
+            points = return_curve_module.fetch_tencent_benchmark_points("sh000001", "2026-05-01", "2026-05-07")
+
+        self.assertEqual(
+            points,
+            [{"date": "2026/05/07", "iso": "2026-05-07", "serial": 46149.0, "close": 3100.5}],
+        )
+        fetch_history.assert_called_once_with("sh000001", date(2026, 5, 1), date(2026, 5, 7))
+
+    def test_fetch_benchmark_points_online_prefers_tencent_index(self):
+        tencent_points = [{"date": "2026/05/07", "iso": "2026-05-07", "serial": 46149, "close": 3100.5}]
+        with (
+            patch.object(return_curve_module, "fetch_tencent_benchmark_points", return_value=tencent_points) as fetch_tencent,
+            patch.object(return_curve_module, "fetch_eastmoney_benchmark_points", return_value=[]) as fetch_eastmoney,
+        ):
+            points = return_curve_module.fetch_benchmark_points_online("1.000001", "2026-05-01", "2026-05-07")
+
+        self.assertEqual(points, tencent_points)
+        fetch_tencent.assert_called_once_with("sh000001", "2026-05-01", "2026-05-07")
+        fetch_eastmoney.assert_not_called()
 
 
 if __name__ == "__main__":

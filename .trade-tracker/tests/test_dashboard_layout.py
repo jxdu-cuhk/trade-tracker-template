@@ -8,7 +8,12 @@ from pathlib import Path
 TOOLS_DIR = Path(__file__).resolve().parents[1] / "tools"
 sys.path.insert(0, str(TOOLS_DIR))
 
-from trade_tracker.dashboard_layout import apply_tonghuashun_curve_style, collapse_secondary_sections, reorder_dashboard_sections
+from trade_tracker.dashboard_layout import (
+    apply_tonghuashun_curve_style,
+    collapse_secondary_sections,
+    insert_section_order_panel,
+    reorder_dashboard_sections,
+)
 
 
 def section(title: str, body: str = "") -> str:
@@ -31,6 +36,7 @@ class DashboardLayoutTests(unittest.TestCase):
             + section("分年度个股汇总")
             + section("盈亏日历 / 阶段账单")
             + section("清仓分析")
+            + section("收益报告")
             + section("交易时间线")
             + section("工作表入口")
             + "</main>"
@@ -44,6 +50,7 @@ class DashboardLayoutTests(unittest.TestCase):
             "清仓分析",
             "总体概览",
             "总收益曲线",
+            "收益报告",
             "分年度个股汇总",
             "交易时间线",
             "工作表入口",
@@ -51,6 +58,27 @@ class DashboardLayoutTests(unittest.TestCase):
 
         positions = [updated.index(f"<h2 class=\"section-title\">{title}</h2>") for title in titles]
         self.assertEqual(positions, sorted(positions))
+
+    def test_insert_section_order_panel_before_dashboard_sections(self):
+        html = (
+            "<main>"
+            + section("当前持仓").replace(" open>", ">")
+            + section("未平仓期权").replace(" open>", ">")
+            + section("总收益曲线").replace(" open>", ">")
+            + "</main>"
+        )
+
+        updated = insert_section_order_panel(html)
+        updated_again = insert_section_order_panel(updated)
+
+        self.assertIn("data-section-order-panel", updated)
+        self.assertIn("data-section-order-list", updated)
+        self.assertIn("data-section-order-save", updated)
+        self.assertIn("data-section-order-reset", updated)
+        self.assertIn("trade-tracker-section-order-v1", updated)
+        self.assertIn('draggable="true" data-section-title="当前持仓"', updated)
+        self.assertLess(updated.index("data-section-order-panel"), updated.index('<h2 class="section-title">当前持仓</h2>'))
+        self.assertEqual(updated, updated_again)
 
     def test_apply_tonghuashun_curve_style_inserts_local_benchmark_shell(self):
         html = (
@@ -77,6 +105,7 @@ class DashboardLayoutTests(unittest.TestCase):
         self.assertIn("上证指数", updated)
         self.assertIn('data-curve-metric="amount"', updated)
         self.assertIn('data-curve-assist="extreme"', updated)
+        self.assertIn('data-curve-assist="growth"', updated)
         self.assertIn('data-curve-assist="drawdown"', updated)
         self.assertNotIn('data-curve-assist="asset-return"', updated)
         self.assertIn("ths-curve-control-panel", updated)

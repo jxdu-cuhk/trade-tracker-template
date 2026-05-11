@@ -1292,6 +1292,29 @@ def stock_summary_total_rows(stock_table_html: str) -> list[tuple[str, str, str,
     return total_rows
 
 
+def set_row_data_year(row_prefix: str, year: str) -> str:
+    escaped_year = html.escape(year, quote=True)
+    if "data-year=" in row_prefix:
+        return re.sub(r'\bdata-year="[^"]*"', f'data-year="{escaped_year}"', row_prefix, count=1)
+    return row_prefix.replace("<tr", f'<tr data-year="{escaped_year}"', 1)
+
+
+def final_clear_year_from_stock_map(stock_map: dict[str, str]) -> str:
+    clear_text = cell_text(stock_map.get("最后清仓时间", ""))
+    match = re.search(r"(\d{4})[/-]\d{1,2}[/-]\d{1,2}", clear_text)
+    if match:
+        return match.group(1)
+    return str(date.today().year)
+
+
+def stock_summary_cell_for_annual(label: str, stock_map: dict[str, str]) -> str:
+    if label in stock_map:
+        return stock_map[label]
+    if label == "已平仓笔数" and "交易笔数" in stock_map:
+        return stock_map["交易笔数"]
+    return default_td_for_label(label)
+
+
 def annual_source_cell(label: str, annual_map: dict[str, str], stock_map: dict[str, str]) -> str:
     if label in annual_map:
         return annual_map[label]
@@ -1322,23 +1345,34 @@ def normalize_annual_summary_columns(
     rendered_rows = []
     for row_prefix, _row_body, row_suffix, stock_map in stock_total_rows:
         new_cells = [
-            '<td class="text">全部</td>' if label == "年份" else stock_map.get(label, default_td_for_label(label))
+            '<td class="text">全部</td>' if label == "年份" else stock_summary_cell_for_annual(label, stock_map)
             for label in ANNUAL_STOCK_SUMMARY_COLUMN_ORDER
         ]
-        rendered_rows.append(row_prefix + "".join(new_cells) + row_suffix)
+        rendered_rows.append(set_row_data_year(row_prefix, "total") + "".join(new_cells) + row_suffix)
 
-    for row_prefix, _row_body, row_suffix, cells in body_rows(annual_table_html):
-        annual_map = cell_map_from_row(labels, cells)
-        if not annual_map:
-            rendered_rows.append(row_prefix + "".join(cells) + row_suffix)
-            continue
-        key = (cell_text(annual_map["代码"]), cell_text(annual_map["币种"]))
-        stock_map = stock_lookup.get(key, {})
-        new_cells = [
-            annual_source_cell(label, annual_map, stock_map)
-            for label in ANNUAL_STOCK_SUMMARY_COLUMN_ORDER
-        ]
-        rendered_rows.append(row_prefix + "".join(new_cells) + row_suffix)
+    if stock_total_rows:
+        for row_prefix, _row_body, row_suffix, stock_map in stock_total_rows:
+            year = final_clear_year_from_stock_map(stock_map)
+            new_cells = [
+                f'<td class="text">{html.escape(year)}</td>'
+                if label == "年份"
+                else stock_summary_cell_for_annual(label, stock_map)
+                for label in ANNUAL_STOCK_SUMMARY_COLUMN_ORDER
+            ]
+            rendered_rows.append(set_row_data_year(row_prefix, year) + "".join(new_cells) + row_suffix)
+    else:
+        for row_prefix, _row_body, row_suffix, cells in body_rows(annual_table_html):
+            annual_map = cell_map_from_row(labels, cells)
+            if not annual_map:
+                rendered_rows.append(row_prefix + "".join(cells) + row_suffix)
+                continue
+            key = (cell_text(annual_map["代码"]), cell_text(annual_map["币种"]))
+            stock_map = stock_lookup.get(key, {})
+            new_cells = [
+                annual_source_cell(label, annual_map, stock_map)
+                for label in ANNUAL_STOCK_SUMMARY_COLUMN_ORDER
+            ]
+            rendered_rows.append(row_prefix + "".join(new_cells) + row_suffix)
 
     new_body_html = body_match.group(1) + "\n      " + "".join(rendered_rows) + "\n    " + body_match.group(3)
 

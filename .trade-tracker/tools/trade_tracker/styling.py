@@ -692,9 +692,23 @@ details[data-ths-return-curve] .curve-drawdown-band {{
   pointer-events: none;
 }}
 
+details[data-ths-return-curve] .curve-growth-band {{
+  fill: rgba(255, 77, 79, 0.07);
+  pointer-events: none;
+}}
+
 details[data-ths-return-curve] .curve-drawdown-link {{
   fill: none;
   stroke: rgba(255, 143, 15, 0.9);
+  stroke-width: 1.25px;
+  stroke-dasharray: 4 3;
+  stroke-linecap: round;
+  pointer-events: none;
+}}
+
+details[data-ths-return-curve] .curve-growth-link {{
+  fill: none;
+  stroke: rgba(255, 77, 79, 0.9);
   stroke-width: 1.25px;
   stroke-dasharray: 4 3;
   stroke-linecap: round;
@@ -709,8 +723,27 @@ details[data-ths-return-curve] .curve-drawdown-marker {{
   pointer-events: none;
 }}
 
+details[data-ths-return-curve] .curve-growth-marker {{
+  fill: #ffffff;
+  stroke: #ff4d4f;
+  stroke-width: 1.5px;
+  opacity: 0.9;
+  pointer-events: none;
+}}
+
 details[data-ths-return-curve] .curve-drawdown-label {{
   fill: #ff9f1a;
+  font-size: 12px;
+  font-weight: 900;
+  paint-order: stroke;
+  stroke: #ffffff;
+  stroke-width: 4px;
+  stroke-linejoin: round;
+  pointer-events: none;
+}}
+
+details[data-ths-return-curve] .curve-growth-label {{
+  fill: #ff4d4f;
   font-size: 12px;
   font-weight: 900;
   paint-order: stroke;
@@ -1225,6 +1258,723 @@ details[data-ths-return-curve] .ths-curve-bars div:nth-child(2) strong {{
   font-size: 11px;
 }}
 
+.section-order-panel {{
+  margin: 0 0 14px;
+  border: 1px solid #edf0f2;
+  border-radius: 16px;
+  background: #ffffff;
+  padding: 16px;
+  box-shadow: 0 12px 28px rgba(60, 64, 67, 0.05);
+}}
+
+.section-order-head {{
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 14px;
+  margin-bottom: 12px;
+}}
+
+.section-order-title {{
+  margin: 0;
+  color: #202124;
+  font-size: 17px;
+  line-height: 1.25;
+  font-weight: 900;
+}}
+
+.section-order-subtitle {{
+  margin: 3px 0 0;
+  color: #9aa0a6;
+  font-size: 12px;
+  font-weight: 800;
+}}
+
+.section-order-actions {{
+  display: inline-flex;
+  align-items: center;
+  gap: 8px;
+}}
+
+.section-order-save,
+.section-order-reset {{
+  appearance: none;
+  min-height: 34px;
+  border-radius: 999px;
+  cursor: pointer;
+  font: inherit;
+  font-size: 12px;
+  font-weight: 900;
+  padding: 0 14px;
+  white-space: nowrap;
+}}
+
+.section-order-save {{
+  border: 0;
+  background: #ff2f45;
+  color: #ffffff;
+  box-shadow: 0 8px 18px rgba(255, 47, 69, 0.18);
+}}
+
+.section-order-reset {{
+  border: 1px solid #e5e9ec;
+  background: #f7f8f9;
+  color: #6f7a80;
+}}
+
+.section-order-save:hover,
+.section-order-save:focus-visible {{
+  background: #f5223a;
+}}
+
+.section-order-reset:hover,
+.section-order-reset:focus-visible {{
+  border-color: #d9dee2;
+  background: #ffffff;
+  color: #3c4043;
+}}
+
+.section-order-save:focus-visible,
+.section-order-reset:focus-visible {{
+  outline: 2px solid rgba(255, 47, 69, 0.22);
+  outline-offset: 2px;
+}}
+
+.section-order-list {{
+  display: flex;
+  flex-wrap: wrap;
+  gap: 8px;
+  margin: 0;
+  padding: 0;
+  list-style: none;
+}}
+
+.section-order-item {{
+  display: inline-flex;
+  min-height: 36px;
+  min-width: 136px;
+  align-items: center;
+  gap: 8px;
+  border: 1px solid #e8edf0;
+  border-radius: 10px;
+  background: #f8fafb;
+  color: #303134;
+  cursor: grab;
+  font-size: 13px;
+  font-weight: 850;
+  padding: 0 12px;
+  touch-action: none;
+  user-select: none;
+}}
+
+.section-order-item:active {{
+  cursor: grabbing;
+}}
+
+.section-order-item.is-dragging {{
+  opacity: 0.58;
+  transform: scale(0.985);
+}}
+
+.section-order-grip {{
+  color: #b6bec5;
+  font-size: 13px;
+  letter-spacing: -0.14em;
+}}
+
+.section-order-label {{
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}}
+
+.performance-report-shell {{
+  display: grid;
+  gap: 16px;
+}}
+
+.performance-block {{
+  background: #ffffff;
+  border: 1px solid #eef1f4;
+  border-radius: 16px;
+  padding: 18px;
+  box-shadow: 0 14px 30px rgba(60, 64, 67, 0.06);
+}}
+
+.performance-title,
+.performance-title-row h3 {{
+  margin: 0;
+  color: #202124;
+  font-size: 20px;
+  font-weight: 900;
+}}
+
+.performance-title::before {{
+  content: "";
+  display: inline-block;
+  width: 6px;
+  height: 22px;
+  margin-right: 10px;
+  border-radius: 999px;
+  background: #ff4d4f;
+  vertical-align: -4px;
+}}
+
+.performance-title-row {{
+  display: flex;
+  align-items: baseline;
+  justify-content: space-between;
+  gap: 12px;
+  margin-bottom: 14px;
+}}
+
+.performance-title-row strong {{
+  color: #ff4d4f;
+  font-size: 15px;
+  font-weight: 900;
+}}
+
+.performance-title-row em {{
+  color: #ff4d4f;
+  font-style: normal;
+}}
+
+.performance-swing-grid {{
+  display: grid;
+  grid-template-columns: repeat(2, minmax(0, 1fr));
+  gap: 14px;
+  margin-top: 16px;
+}}
+
+.performance-swing-card {{
+  position: relative;
+  min-height: 170px;
+  border-radius: 10px;
+  padding: 22px;
+  overflow: hidden;
+}}
+
+.performance-swing-card::after {{
+  content: "";
+  position: absolute;
+  right: 14px;
+  bottom: 12px;
+  width: 116px;
+  height: 96px;
+  opacity: 0.13;
+  background:
+    linear-gradient(135deg, transparent 38%, currentColor 38% 52%, transparent 52%),
+    linear-gradient(45deg, transparent 45%, currentColor 45% 58%, transparent 58%);
+}}
+
+.performance-swing-card span,
+.performance-swing-card small {{
+  display: block;
+  color: #6b7280;
+  font-size: 14px;
+  font-weight: 800;
+}}
+
+.performance-swing-card strong {{
+  display: block;
+  margin-top: 18px;
+  font-size: 42px;
+  line-height: 1;
+  font-weight: 950;
+}}
+
+.performance-swing-card em {{
+  display: block;
+  margin: 8px 0 22px;
+  font-size: 20px;
+  font-style: normal;
+  font-weight: 900;
+}}
+
+.performance-swing-card small + small {{
+  margin-top: 8px;
+}}
+
+.swing-positive {{
+  color: #ff4d4f;
+  background: #fff1f1;
+}}
+
+.swing-negative {{
+  color: #4285f4;
+  background: #eef4ff;
+}}
+
+.performance-compare-list {{
+  display: grid;
+  gap: 14px;
+  margin-top: 14px;
+}}
+
+.performance-compare-card {{
+  display: grid;
+  grid-template-columns: minmax(0, 1fr) 58px minmax(0, 1fr);
+  gap: 12px;
+  align-items: center;
+  position: relative;
+  padding: 18px 18px 34px;
+  border-radius: 12px;
+  background: #ffffff;
+  border: 1px solid #f0f2f5;
+  box-shadow: 0 12px 26px rgba(60, 64, 67, 0.05);
+}}
+
+.performance-compare-card div:last-of-type {{
+  text-align: right;
+}}
+
+.performance-compare-card strong {{
+  display: block;
+  color: #202124;
+  font-size: 18px;
+  font-weight: 900;
+}}
+
+.performance-compare-card span {{
+  display: block;
+  margin-top: 3px;
+  color: #9aa0a6;
+  font-size: 13px;
+  font-weight: 700;
+}}
+
+.performance-compare-card em {{
+  display: block;
+  margin-top: 12px;
+  font-size: 19px;
+  font-style: normal;
+  font-weight: 900;
+}}
+
+.performance-compare-card b {{
+  justify-self: center;
+  color: #202124;
+  font-size: 20px;
+  font-weight: 900;
+}}
+
+.performance-compare-card i {{
+  position: absolute;
+  left: 18px;
+  right: 18px;
+  bottom: 15px;
+  height: 12px;
+  border-radius: 999px;
+  overflow: hidden;
+  background:
+    linear-gradient(90deg, #ff514d 0 var(--left), #ffffff var(--left) calc(var(--left) + 2px), #4285f4 calc(var(--left) + 2px) 100%);
+}}
+
+.performance-calendar-toolbar {{
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 12px;
+  flex-wrap: wrap;
+  margin: 4px 0 14px;
+}}
+
+.performance-year-controls {{
+  display: inline-flex;
+  align-items: center;
+  gap: 3px;
+  padding: 4px;
+  border-radius: 999px;
+  background: #f3f4f6;
+}}
+
+.performance-year-button {{
+  appearance: none;
+  border: 0;
+  border-radius: 999px;
+  background: transparent;
+  color: #6f767d;
+  cursor: pointer;
+  font: inherit;
+  font-size: 13px;
+  font-weight: 900;
+  padding: 7px 12px;
+  transition: background 0.16s ease, color 0.16s ease, box-shadow 0.16s ease;
+}}
+
+.performance-year-button.is-active {{
+  background: #ff4d4f;
+  color: #ffffff;
+  box-shadow: 0 6px 14px rgba(255, 77, 79, 0.18);
+}}
+
+.performance-calendar-stats {{
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  flex-wrap: wrap;
+}}
+
+.performance-calendar-stats span {{
+  display: inline-flex;
+  align-items: center;
+  gap: 5px;
+  min-height: 30px;
+  padding: 0 10px;
+  border-radius: 999px;
+  background: #f7f8fa;
+  color: #7b838b;
+  font-size: 12px;
+  font-weight: 900;
+}}
+
+.performance-calendar-stats b {{
+  color: #202124;
+  font-size: 13px;
+}}
+
+.performance-calendar-chart-wrap {{
+  border: 1px solid #eef1f4;
+  border-radius: 14px;
+  background: linear-gradient(180deg, #ffffff 0%, #fbfcfe 100%);
+  padding: 10px 12px 8px;
+  overflow: hidden;
+}}
+
+.performance-calendar-chart {{
+  display: block;
+  width: 100%;
+  height: 236px;
+}}
+
+.performance-chart-grid {{
+  stroke: #edf0f3;
+  stroke-width: 1;
+  stroke-dasharray: 4 5;
+}}
+
+.performance-chart-axis {{
+  stroke: #d8dde3;
+  stroke-width: 1.2;
+}}
+
+.performance-chart-bar-positive {{
+  fill: #ff514d;
+}}
+
+.performance-chart-bar-negative {{
+  fill: #4f83f1;
+}}
+
+.performance-chart-bar {{
+  cursor: pointer;
+}}
+
+.performance-chart-bar.is-selected {{
+  stroke: #202124;
+  stroke-width: 2px;
+}}
+
+.performance-chart-x,
+.performance-chart-y,
+.performance-chart-empty {{
+  fill: #9aa0a6;
+  font-size: 12px;
+  font-weight: 800;
+}}
+
+.performance-calendar {{
+  display: grid;
+  gap: 14px;
+  margin-top: 14px;
+}}
+
+.performance-year-group {{
+  border: 1px solid #eef1f4;
+  border-radius: 14px;
+  background: #ffffff;
+  padding: 14px;
+}}
+
+.performance-year-head {{
+  display: flex;
+  align-items: baseline;
+  justify-content: space-between;
+  gap: 12px;
+  margin-bottom: 12px;
+}}
+
+.performance-year-head strong {{
+  color: #202124;
+  font-size: 17px;
+  font-weight: 950;
+}}
+
+.performance-year-head span {{
+  color: #ff4d4f;
+  font-size: 15px;
+  font-weight: 950;
+}}
+
+.performance-calendar-grid {{
+  display: grid;
+  grid-template-columns: repeat(6, minmax(0, 1fr));
+  gap: 7px;
+}}
+
+.performance-month {{
+  appearance: none;
+  border: 0;
+  min-height: 88px;
+  border-radius: 9px;
+  padding: 11px 8px;
+  display: grid;
+  align-content: center;
+  justify-items: center;
+  gap: 6px;
+  text-align: center;
+  color: #ffffff;
+  cursor: pointer;
+  font: inherit;
+  box-shadow: inset 0 0 0 1px rgba(255, 255, 255, 0.22);
+  transition: box-shadow 0.16s ease, transform 0.16s ease;
+}}
+
+.performance-month:hover {{
+  transform: translateY(-1px);
+}}
+
+.performance-month.is-selected {{
+  box-shadow:
+    0 0 0 2px #ffffff,
+    0 0 0 4px #ffcc33,
+    0 10px 22px rgba(60, 64, 67, 0.13);
+}}
+
+.performance-month span {{
+  color: rgba(255, 255, 255, 0.72);
+  font-size: 14px;
+  font-weight: 900;
+}}
+
+.performance-month strong {{
+  font-size: 19px;
+  line-height: 1.05;
+  font-weight: 950;
+}}
+
+.performance-month small {{
+  color: rgba(255, 255, 255, 0.62);
+  font-size: 11px;
+  font-weight: 800;
+}}
+
+.performance-month-positive {{
+  background: rgba(255, 91, 82, var(--tile-alpha, 0.86));
+}}
+
+.performance-month-negative {{
+  background: rgba(82, 128, 230, var(--tile-alpha, 0.86));
+}}
+
+.performance-month-zero {{
+  background: #eef1f5;
+  color: #a4abb3;
+}}
+
+.performance-month-zero span,
+.performance-month-zero small {{
+  color: #a4abb3;
+}}
+
+.performance-stock-board {{
+  display: grid;
+  grid-template-columns: minmax(0, 1.65fr) minmax(280px, 0.95fr);
+  gap: 14px;
+  align-items: stretch;
+}}
+
+.performance-treemap {{
+  position: relative;
+  display: block;
+  min-height: 320px;
+  border: 1px solid #eef1f4;
+  border-radius: 14px;
+  background: #f7f8fb;
+  padding: 6px;
+  overflow: hidden;
+}}
+
+.performance-treemap .performance-empty {{
+  position: absolute;
+  inset: 0;
+  min-height: 0;
+}}
+
+.performance-empty {{
+  width: 100%;
+  min-height: 190px;
+  display: grid;
+  place-items: center;
+  color: #9aa0a6;
+  font-size: 14px;
+  font-weight: 900;
+}}
+
+.performance-stock-tile {{
+  position: absolute;
+  box-sizing: border-box;
+  min-width: 0;
+  min-height: 0;
+  border: 2px solid #f7f8fb;
+  border-radius: 7px;
+  padding: 11px;
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  justify-content: center;
+  text-align: center;
+  color: #ffffff;
+  overflow: hidden;
+}}
+
+.performance-stock-tile span {{
+  max-width: 100%;
+  font-size: 14px;
+  line-height: 1.12;
+  font-weight: 950;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}}
+
+.performance-stock-tile strong {{
+  margin-top: 5px;
+  max-width: 100%;
+  font-size: 13px;
+  line-height: 1.12;
+  font-weight: 950;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}}
+
+.performance-stock-tile small {{
+  margin-top: 3px;
+  max-width: 100%;
+  color: rgba(255, 255, 255, 0.68);
+  font-size: 11px;
+  line-height: 1.1;
+  font-weight: 800;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}}
+
+.performance-stock-tile.is-small {{
+  padding: 8px 6px;
+}}
+
+.performance-stock-tile.is-small span {{
+  font-size: 12px;
+}}
+
+.performance-stock-tile.is-small strong {{
+  font-size: 11px;
+}}
+
+.performance-stock-tile.is-small small,
+.performance-stock-tile.is-compact strong,
+.performance-stock-tile.is-compact small {{
+  display: none;
+}}
+
+.performance-stock-tile.is-compact {{
+  padding: 4px;
+}}
+
+.performance-stock-tile.is-compact span {{
+  font-size: 11px;
+}}
+
+.performance-stock-positive {{
+  background: #ff6b5f;
+}}
+
+.performance-stock-negative {{
+  background: #5b86e8;
+}}
+
+.performance-stock-list {{
+  display: grid;
+  gap: 12px;
+}}
+
+.performance-stock-rank {{
+  border: 1px solid #eef1f4;
+  border-radius: 14px;
+  background: #ffffff;
+  padding: 14px;
+}}
+
+.performance-stock-rank h4 {{
+  margin: 0 0 10px;
+  color: #202124;
+  font-size: 15px;
+  font-weight: 950;
+}}
+
+.performance-stock-rank ol {{
+  list-style: none;
+  margin: 0;
+  padding: 0;
+  display: grid;
+  gap: 8px;
+}}
+
+.performance-stock-rank li {{
+  display: grid;
+  grid-template-columns: 24px minmax(0, 1fr) auto;
+  align-items: center;
+  gap: 8px;
+  min-height: 30px;
+}}
+
+.performance-stock-rank li span {{
+  width: 22px;
+  height: 22px;
+  border-radius: 999px;
+  display: grid;
+  place-items: center;
+  background: #f2f4f7;
+  color: #8c939b;
+  font-size: 11px;
+  font-weight: 950;
+}}
+
+.performance-stock-rank li strong {{
+  min-width: 0;
+  color: #3c4043;
+  font-size: 13px;
+  font-weight: 900;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}}
+
+.performance-stock-rank li em {{
+  font-style: normal;
+  font-size: 13px;
+  font-weight: 950;
+}}
+
+.performance-stock-empty {{
+  grid-template-columns: 1fr !important;
+  color: #a4abb3;
+  font-size: 13px;
+  font-weight: 900;
+}}
+
 @media (max-width: 1180px) {{
   .currency-overview-grid {{
     grid-template-columns: repeat(2, minmax(0, 1fr));
@@ -1296,6 +2046,29 @@ details[data-ths-return-curve] .ths-curve-bars div:nth-child(2) strong {{
     align-items: flex-start;
   }}
 
+  .section-order-head {{
+    align-items: flex-start;
+    flex-direction: column;
+  }}
+
+  .section-order-actions {{
+    width: 100%;
+  }}
+
+  .section-order-save,
+  .section-order-reset {{
+    flex: 1;
+  }}
+
+  .section-order-list {{
+    display: grid;
+    grid-template-columns: 1fr;
+  }}
+
+  .section-order-item {{
+    min-width: 0;
+  }}
+
   .metric-card-hero,
   .metric-card-return,
   .metric-card-annual,
@@ -1354,6 +2127,36 @@ details[data-ths-return-curve] .ths-curve-bars div:nth-child(2) strong {{
 
   details[data-ths-return-curve] .ths-curve-bars {{
     grid-template-columns: 1fr;
+  }}
+
+  .performance-swing-grid,
+  .performance-compare-card {{
+    grid-template-columns: 1fr;
+  }}
+
+  .performance-compare-card div:last-of-type {{
+    text-align: left;
+  }}
+
+  .performance-calendar-toolbar {{
+    align-items: stretch;
+  }}
+
+  .performance-year-controls,
+  .performance-calendar-stats {{
+    width: 100%;
+  }}
+
+  .performance-calendar-grid {{
+    grid-template-columns: repeat(3, minmax(0, 1fr));
+  }}
+
+  .performance-stock-board {{
+    grid-template-columns: 1fr;
+  }}
+
+  .performance-swing-card strong {{
+    font-size: 34px;
   }}
 }}
 

@@ -10,7 +10,8 @@ from urllib.error import URLError
 from urllib.parse import urlencode
 from urllib.request import Request, urlopen
 
-from .market_data import display_currency_label, infer_secid, tencent_symbol
+from . import state
+from .market_data import current_fx_rates_to_cny, display_currency_label, infer_secid, tencent_symbol
 from .runtime import APP_DIR, emit_progress
 from .settings import OPTION_EVENTS
 from .utils import cell_raw, clean_text, core_trade_type, excel_serial_to_date, parse_display_number, parse_float, raw_number, raw_text_value
@@ -22,6 +23,10 @@ HISTORY_SOURCE_DIR = APP_DIR / "history"
 HISTORY_HTTP_TIMEOUT = 8
 HISTORY_WORKERS = 5
 EPSILON = 0.000001
+PRICE_SCALE_LOWER_BOUND = 0.67
+PRICE_SCALE_UPPER_BOUND = 1.5
+CONSISTENT_SCALE_NORMAL_LOWER_BOUND = 0.88
+CONSISTENT_SCALE_NORMAL_UPPER_BOUND = 1.12
 
 
 @dataclass(frozen=True)
@@ -143,6 +148,16 @@ def entry_was_checked_today(entry: object) -> bool:
     except ValueError:
         return False
     return fetched_at >= date.today()
+
+
+def price_scale_was_checked_today(entry: object) -> bool:
+    if not isinstance(entry, dict):
+        return False
+    try:
+        checked_at = date.fromisoformat(clean_text(entry.get("price_scale_checked_at")))
+    except ValueError:
+        return False
+    return checked_at >= date.today()
 
 
 def entry_covers(points: list[SecurityHistoryPoint], start: date, end: date, entry: object = None) -> bool:
@@ -775,8 +790,10 @@ def history_lookup(points: list[SecurityHistoryPoint]) -> dict[date, float]:
 
 def fetch_histories_for_lots(core, lots: list[StockCurveLot]) -> dict[tuple[str, str], dict[date, float]]:
     ranges: dict[tuple[str, str], tuple[date, date, str]] = {}
+    lots_by_key: dict[tuple[str, str], list[StockCurveLot]] = {}
     for lot in lots:
         key = (lot.ticker, lot.currency)
+        lots_by_key.setdefault(key, []).append(lot)
         current = ranges.get(key)
         if current is None:
             ranges[key] = (lot.open_date, lot.end_date, lot.currency_raw)
@@ -799,12 +816,20 @@ def fetch_histories_for_lots(core, lots: list[StockCurveLot]) -> dict[tuple[str,
         cache_key = history_cache_key(ticker, currency_raw)
         entry = securities.get(cache_key)
         cached_points = entry_points(entry)
-        if entry_covers(cached_points, start, end, entry):
-            histories[key] = history_lookup(slice_history_points(cached_points, start, end))
+        cached_slice = slice_history_points(cached_points, start, end)
+        scale_refresh = (
+            bool(cached_slice)
+            and cached_history_needs_trade_scale_refresh(lots_by_key.get(key, []), cached_slice)
+            and not price_scale_was_checked_today(entry)
+        )
+        if entry_covers(cached_points, start, end, entry) and not scale_refresh:
+            histories[key] = history_lookup(cached_slice)
             continue
 
         fetch_ranges: list[tuple[date, date]] = []
-        if not cached_points:
+        if scale_refresh:
+            fetch_ranges.append((start, end))
+        elif not cached_points:
             fetch_ranges.append((start, end))
         else:
             first_cached = date.fromisoformat(cached_points[0].iso)
@@ -822,6 +847,8 @@ def fetch_histories_for_lots(core, lots: list[StockCurveLot]) -> dict[tuple[str,
             "cache_key": cache_key,
             "cached_points": cached_points,
             "fetched_points": [],
+            "lots": lots_by_key.get(key, []),
+            "replace_cached_range": scale_refresh,
         }
         for range_start, range_end in fetch_ranges:
             if range_end >= range_start:
@@ -860,14 +887,24 @@ def fetch_histories_for_lots(core, lots: list[StockCurveLot]) -> dict[tuple[str,
         end = item["end"]
         cached_points = list(item.get("cached_points") or [])
         fetched_points = list(item.get("fetched_points") or [])
-        merged = merge_cache_points(cached_points, fetched_points)
+        if item.get("replace_cached_range") and fetched_points:
+            start_iso = start.isoformat() if isinstance(start, date) else ""
+            end_iso = end.isoformat() if isinstance(end, date) else ""
+            preserved = [point for point in cached_points if point.iso < start_iso or point.iso > end_iso]
+            merged = merge_cache_points(preserved, fetched_points)
+        else:
+            merged = merge_cache_points(cached_points, fetched_points)
+        sliced_history = history_lookup(slice_history_points(merged, start, end))
+        price_scale_mismatch = history_needs_trade_scale_runtime_adjustment(item.get("lots") or [], sliced_history)
         securities[cache_key] = {
             "ticker": clean_text(ticker),
             "currency": clean_text(currency_raw),
             "fetched_at": date.today().isoformat(),
+            "price_scale_checked_at": date.today().isoformat(),
+            "price_scale_mismatch": price_scale_mismatch,
             "points": serialize_history_points(merged),
         }
-        histories[key] = history_lookup(slice_history_points(merged, start, end))
+        histories[key] = sliced_history
     if should_save:
         save_history_cache(cache)
     return histories
@@ -903,6 +940,54 @@ def entry_price_for_curve(lot: StockCurveLot, history: dict[date, float]) -> flo
     return close_for_day(history, lot.open_date) or lot.open_price
 
 
+def history_price_scale_for_lot(lot: StockCurveLot, history: dict[date, float]) -> float:
+    entry_history_price = close_for_day(history, lot.open_date)
+    if entry_history_price is None or entry_history_price <= EPSILON or lot.open_price <= EPSILON:
+        return 1.0
+    open_scale = lot.open_price / entry_history_price
+    close_scale = None
+    if lot.close_date is not None and lot.close_date != lot.open_date and lot.close_price is not None and lot.close_price > EPSILON:
+        close_history_price = close_for_day(history, lot.close_date)
+        if close_history_price is not None and close_history_price > EPSILON:
+            close_scale = lot.close_price / close_history_price
+    scale = open_scale
+    if close_scale is not None:
+        if close_scale <= EPSILON:
+            return 1.0
+        consistency = open_scale / close_scale
+        if 0.92 <= consistency <= 1.08:
+            scale = (open_scale + close_scale) / 2
+            if CONSISTENT_SCALE_NORMAL_LOWER_BOUND <= scale <= CONSISTENT_SCALE_NORMAL_UPPER_BOUND:
+                return 1.0
+            return scale
+        elif PRICE_SCALE_LOWER_BOUND <= open_scale <= PRICE_SCALE_UPPER_BOUND:
+            return 1.0
+    if PRICE_SCALE_LOWER_BOUND <= scale <= PRICE_SCALE_UPPER_BOUND:
+        return 1.0
+    return scale
+
+
+def history_price_on_trade_scale(lot: StockCurveLot, price: float, history: dict[date, float]) -> float:
+    return price * history_price_scale_for_lot(lot, history)
+
+
+def history_needs_trade_scale_runtime_adjustment(lots: object, history: dict[date, float]) -> bool:
+    if not isinstance(lots, list) or not history:
+        return False
+    for lot in lots:
+        if not isinstance(lot, StockCurveLot):
+            continue
+        if abs(history_price_scale_for_lot(lot, history) - 1.0) > EPSILON:
+            return True
+    return False
+
+
+def cached_history_needs_trade_scale_refresh(lots: object, points: list[SecurityHistoryPoint]) -> bool:
+    if not points:
+        return False
+    return history_needs_trade_scale_runtime_adjustment(lots, history_lookup(points))
+
+
 def realized_pnl_for_curve(lot: StockCurveLot, history: dict[date, float]) -> float:
     if lot.realized_pnl is not None:
         return float(lot.realized_pnl)
@@ -927,6 +1012,151 @@ def current_holding_price_lookup(data: dict[str, object] | None) -> dict[tuple[s
         if ticker and currency and price is not None and price > 0:
             prices[(ticker, currency)] = float(price)
     return prices
+
+
+def stock_name_source_map(data: dict[str, object] | None) -> dict[tuple[str, str], str]:
+    if not isinstance(data, dict):
+        return {}
+    names: dict[tuple[str, str], str] = {}
+    for collection in ("holdings", "stock_summary", "annual_summary"):
+        for item in data.get(collection, []) or []:
+            if not isinstance(item, dict):
+                continue
+            ticker = clean_text(item.get("ticker"))
+            currency = clean_text(item.get("currency"))
+            name = clean_text(item.get("name") or item.get("security_name") or item.get("display_name"))
+            if ticker and currency and name and name.upper() != ticker.upper():
+                names[(ticker, currency)] = name
+    return names
+
+
+def resolve_stock_name(
+    core,
+    ticker: str,
+    currency: str,
+    currency_raw: str,
+    name_sources: dict[tuple[str, str], str],
+    name_cache: dict[tuple[str, str], str],
+) -> str:
+    key = (ticker, currency)
+    if key in name_cache:
+        return name_cache[key]
+    name = name_sources.get(key, "")
+    if not name:
+        try:
+            name = clean_text(core.lookup_security_name(ticker, currency_raw, False))
+        except TypeError:
+            try:
+                name = clean_text(core.lookup_security_name(ticker, currency_raw))
+            except Exception:
+                name = ""
+        except Exception:
+            name = ""
+    name_cache[key] = name or ticker
+    return name_cache[key]
+
+
+def add_stock_snapshot_value(
+    bucket: dict[tuple[str, str], dict[str, object]],
+    *,
+    ticker: str,
+    name: str,
+    currency: str,
+    currency_raw: str,
+    amount: float,
+) -> None:
+    if not ticker or not currency or abs(amount) <= EPSILON:
+        return
+    key = (ticker, currency)
+    item = bucket.get(key)
+    if item is None:
+        item = {
+            "code": ticker,
+            "name": name or ticker,
+            "currency": currency,
+            "currency_raw": currency_raw or currency,
+            "value": 0.0,
+        }
+        bucket[key] = item
+    item["value"] = float(item.get("value") or 0.0) + float(amount)
+
+
+def cny_rate_for_currency(currency: str, rates: dict[str, float]) -> float:
+    text = clean_text(currency)
+    if text in {"人民币", "CNY", "RMB"}:
+        return 1.0
+    return rates.get(text, 1.0)
+
+
+def build_performance_stock_payload(
+    snapshots: dict[date, dict[tuple[str, str], dict[str, object]]],
+) -> dict[str, object]:
+    if not snapshots:
+        return {"months": {}, "years": {}}
+    try:
+        rates = current_fx_rates_to_cny()
+    except Exception:
+        rates = {"人民币": 1.0}
+
+    history_by_stock: dict[tuple[str, str], list[tuple[date, dict[str, object]]]] = {}
+    for day in sorted(snapshots):
+        for key, item in snapshots[day].items():
+            history_by_stock.setdefault(key, []).append((day, item))
+
+    def add_period(
+        periods: dict[str, list[dict[str, object]]],
+        period_key: str,
+        end_item: dict[str, object],
+        delta: float,
+    ) -> None:
+        source_currency = clean_text(end_item.get("currency"))
+        rate = cny_rate_for_currency(source_currency, rates)
+        pnl = delta * rate
+        if abs(pnl) <= 0.005:
+            return
+        periods.setdefault(period_key, []).append(
+            {
+                "code": clean_text(end_item.get("code")),
+                "name": clean_text(end_item.get("name")) or clean_text(end_item.get("code")),
+                "currency": source_currency,
+                "pnl": pnl,
+                "nativePnl": delta,
+            }
+        )
+
+    months: dict[str, list[dict[str, object]]] = {}
+    years: dict[str, list[dict[str, object]]] = {}
+    for entries in history_by_stock.values():
+        previous: tuple[date, dict[str, object]] | None = None
+        month_base: dict[str, tuple[date, dict[str, object]] | None] = {}
+        month_last: dict[str, tuple[date, dict[str, object]]] = {}
+        year_base: dict[str, tuple[date, dict[str, object]] | None] = {}
+        year_last: dict[str, tuple[date, dict[str, object]]] = {}
+        for day, item in entries:
+            month = day.strftime("%Y-%m")
+            year = day.strftime("%Y")
+            if month not in month_base:
+                month_base[month] = previous
+            if year not in year_base:
+                year_base[year] = previous
+            month_last[month] = (day, item)
+            year_last[year] = (day, item)
+            previous = (day, item)
+
+        for month, (_day, end_item) in month_last.items():
+            base = month_base.get(month)
+            base_value = float((base[1].get("value") if base else 0.0) or 0.0)
+            add_period(months, month, end_item, float(end_item.get("value") or 0.0) - base_value)
+
+        for year, (_day, end_item) in year_last.items():
+            base = year_base.get(year)
+            base_value = float((base[1].get("value") if base else 0.0) or 0.0)
+            add_period(years, year, end_item, float(end_item.get("value") or 0.0) - base_value)
+
+    for periods in (months, years):
+        for key, items in list(periods.items()):
+            periods[key] = sorted(items, key=lambda item: abs(float(item.get("pnl") or 0.0)), reverse=True)
+    return {"months": dict(sorted(months.items())), "years": dict(sorted(years.items()))}
 
 
 def mark_price_for_curve_day(
@@ -960,7 +1190,49 @@ def point_dates_for_currency(lots: list[StockCurveLot], histories: dict[tuple[st
     return by_currency
 
 
+def principal_basis_by_currency(
+    lots: list[StockCurveLot],
+    histories: dict[tuple[str, str], dict[date, float]],
+    events: list[RealizedCurveEvent],
+    dates_by_currency: dict[str, set[date]],
+) -> dict[str, dict[date, float]]:
+    flows_by_currency: dict[str, dict[date, float]] = {}
+    for lot in lots:
+        flows = flows_by_currency.setdefault(lot.currency, {})
+        if lot.is_short:
+            flows[lot.open_date] = flows.get(lot.open_date, 0.0) + lot.capital
+            if lot.close_date:
+                realized = realized_pnl_for_curve(lot, histories.get((lot.ticker, lot.currency), {}))
+                flows[lot.close_date] = flows.get(lot.close_date, 0.0) - lot.capital + realized
+        else:
+            flows[lot.open_date] = flows.get(lot.open_date, 0.0) - lot.capital
+            if lot.close_date:
+                realized = realized_pnl_for_curve(lot, histories.get((lot.ticker, lot.currency), {}))
+                flows[lot.close_date] = flows.get(lot.close_date, 0.0) + lot.capital + realized
+    for event in events:
+        flows = flows_by_currency.setdefault(event.currency, {})
+        flows[event.event_date] = flows.get(event.event_date, 0.0) + event.pnl
+
+    basis_by_currency: dict[str, dict[date, float]] = {}
+    for currency, days in dates_by_currency.items():
+        flows = flows_by_currency.get(currency, {})
+        timeline = sorted(set(days) | set(flows))
+        cash = 0.0
+        principal = 0.0
+        basis: dict[date, float] = {}
+        for day in timeline:
+            cash += flows.get(day, 0.0)
+            if cash < -EPSILON:
+                principal += -cash
+                cash = 0.0
+            if day in days:
+                basis[day] = principal
+        basis_by_currency[currency] = basis
+    return basis_by_currency
+
+
 def build_historical_curve_series(core, rows: list[tuple[int, dict[int, object]]], data: dict[str, object] | None = None) -> list[dict[str, object]]:
+    state.PERFORMANCE_STOCK_PAYLOAD = {}
     lots = build_stock_lots(core, rows)
     if not lots:
         return []
@@ -968,9 +1240,15 @@ def build_historical_curve_series(core, rows: list[tuple[int, dict[int, object]]
     lots = adjust_stock_lot_realized_to_summary(lots, data, non_stock_events)
     residual_events = residual_realized_events_from_summary(core, rows, data, lots, non_stock_events)
     histories = fetch_histories_for_lots(core, lots)
-    events = [*non_stock_events, *residual_events, *build_dividend_realized_events(core)]
+    dividend_events = build_dividend_realized_events(core)
+    events = [*non_stock_events, *residual_events, *dividend_events]
+    stock_value_events = [*residual_events, *dividend_events]
     current_prices = current_holding_price_lookup(data)
+    name_sources = stock_name_source_map(data)
+    name_cache: dict[tuple[str, str], str] = {}
+    stock_snapshots: dict[date, dict[tuple[str, str], dict[str, object]]] = {}
     dates_by_currency = point_dates_for_currency(lots, histories, events)
+    principal_by_currency = principal_basis_by_currency(lots, histories, events, dates_by_currency)
     series_list: list[dict[str, object]] = []
     for currency, days in sorted(dates_by_currency.items()):
         if not days:
@@ -985,6 +1263,30 @@ def build_historical_curve_series(core, rows: list[tuple[int, dict[int, object]]
                 if lot.close_date and lot.close_date <= day
             )
             realized_total += sum(event.pnl for event in currency_events if event.event_date <= day)
+            stock_values: dict[tuple[str, str], dict[str, object]] = {}
+            for lot in currency_lots:
+                if not lot.close_date or lot.close_date > day:
+                    continue
+                history = histories.get((lot.ticker, lot.currency), {})
+                add_stock_snapshot_value(
+                    stock_values,
+                    ticker=lot.ticker,
+                    name=resolve_stock_name(core, lot.ticker, lot.currency, lot.currency_raw, name_sources, name_cache),
+                    currency=lot.currency,
+                    currency_raw=lot.currency_raw,
+                    amount=realized_pnl_for_curve(lot, history),
+                )
+            for event in stock_value_events:
+                if event.currency != currency or not event.ticker or event.event_date > day:
+                    continue
+                add_stock_snapshot_value(
+                    stock_values,
+                    ticker=event.ticker,
+                    name=resolve_stock_name(core, event.ticker, event.currency, event.currency, name_sources, name_cache),
+                    currency=event.currency,
+                    currency_raw=event.currency,
+                    amount=event.pnl,
+                )
             unrealized_total = 0.0
             active_capital = 0.0
             has_active_position = False
@@ -1003,9 +1305,23 @@ def build_historical_curve_series(core, rows: list[tuple[int, dict[int, object]]
                 if price is None:
                     continue
                 has_priced_position = True
-                unrealized_total += unrealized_pnl(lot, price)
+                if day < date.today() or (lot.ticker, lot.currency) not in current_prices:
+                    price = history_price_on_trade_scale(lot, price, history)
+                floating = unrealized_pnl(lot, price)
+                unrealized_total += floating
+                add_stock_snapshot_value(
+                    stock_values,
+                    ticker=lot.ticker,
+                    name=resolve_stock_name(core, lot.ticker, lot.currency, lot.currency_raw, name_sources, name_cache),
+                    currency=lot.currency,
+                    currency_raw=lot.currency_raw,
+                    amount=floating,
+                )
             if not has_active_position and not has_priced_position and not closed_on_day and not event_on_day:
                 continue
+            if stock_values:
+                day_snapshot = stock_snapshots.setdefault(day, {})
+                day_snapshot.update(stock_values)
             point = {
                 "date": date_label(day),
                 "iso": day.isoformat(),
@@ -1019,6 +1335,9 @@ def build_historical_curve_series(core, rows: list[tuple[int, dict[int, object]]
                 point["capital"] = active_capital
             elif closed_on_day:
                 point["capital"] = 0.0
+            principal = principal_by_currency.get(currency, {}).get(day)
+            if principal is not None and principal > EPSILON:
+                point["principal"] = principal
             points.append(point)
         if len(points) >= 2:
             capital = parse_float(points[-1].get("capital"))
@@ -1035,6 +1354,7 @@ def build_historical_curve_series(core, rows: list[tuple[int, dict[int, object]]
                     "source": "history",
                 }
             )
+    state.PERFORMANCE_STOCK_PAYLOAD = build_performance_stock_payload(stock_snapshots)
     return series_list
 
 

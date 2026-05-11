@@ -7,7 +7,12 @@ from .analytics import build_holding_days_map, build_last_clear_date_map, build_
 from .branding import brand_dashboard_html, brand_launcher_html
 from .clearance_analysis import insert_clearance_analysis_section
 from .curve_capital import attach_dynamic_curve_capital
-from .dashboard_layout import apply_tonghuashun_curve_style, collapse_secondary_sections, reorder_dashboard_sections
+from .dashboard_layout import (
+    apply_tonghuashun_curve_style,
+    collapse_secondary_sections,
+    insert_section_order_panel,
+    reorder_dashboard_sections,
+)
 from .dividends import load_dividend_events
 from .html_tables import (
     add_balanced_summary_table_script,
@@ -40,6 +45,7 @@ from .names import cache_name, load_name_cache, load_workbook_name_map, name_cac
 from .option_analysis import insert_option_analysis_section
 from .options import patch_dashboard_data_with_options
 from .overview import move_dividend_metric_later, optimize_overview_metrics, split_overview_by_currency
+from .performance_report import insert_performance_report_section
 from .refresh_panel import add_refresh_progress_panel
 from .realized_analysis import insert_realized_analysis_section
 from .return_curve import render_tonghuashun_curve_panels
@@ -197,9 +203,11 @@ def patch_core(core, workbook_path: Path) -> None:
         html = insert_option_analysis_section(core, html, rows)
         html = remove_stock_summary_section(html)
         html = apply_tonghuashun_curve_style(html)
+        html = insert_performance_report_section(html)
         html = reorder_dashboard_sections(html)
         html = collapse_secondary_sections(html)
         html = add_refresh_progress_panel(html)
+        html = insert_section_order_panel(html)
         html = add_balanced_summary_table_script(html)
         html = add_holdings_cny_settlement_footer_script(html)
         html = normalize_legacy_open_option_sections(core, html)
