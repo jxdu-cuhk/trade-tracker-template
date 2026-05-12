@@ -18,6 +18,7 @@ import trade_tracker.historical_curve as historical_curve_module  # noqa: E402
 from trade_tracker import state  # noqa: E402
 from trade_tracker.historical_curve import (  # noqa: E402
     SecurityHistoryPoint,
+    build_performance_stock_payload,
     fetch_security_history_points_online,
     parse_tencent_kline_rows,
     replace_curve_series_with_historical_prices,
@@ -166,6 +167,38 @@ class HistoricalCurveTests(unittest.TestCase):
         self.assertAlmostEqual(item["pnl"], 119.0)
         self.assertAlmostEqual(item["capital"], 1001.0)
         self.assertAlmostEqual(item["rate"], item["pnl"] / item["capital"] * 100)
+
+    def test_performance_stock_monthly_rate_uses_previous_month_end_market_value(self):
+        snapshots = {
+            date(2026, 2, 27): {
+                ("688818", "人民币"): {
+                    "code": "688818",
+                    "name": "中电科蓝",
+                    "currency": "人民币",
+                    "value": 30328.87,
+                    "capital": 4735.0,
+                    "market_value": 35063.87,
+                }
+            },
+            date(2026, 3, 16): {
+                ("688818", "人民币"): {
+                    "code": "688818",
+                    "name": "中电科蓝",
+                    "currency": "人民币",
+                    "value": 26863.87,
+                    "capital": 4735.0,
+                    "market_value": 0.0,
+                }
+            },
+        }
+
+        with patch("trade_tracker.historical_curve.current_fx_rates_to_cny", return_value={"人民币": 1.0}):
+            payload = build_performance_stock_payload(snapshots)
+
+        march_item = payload["months"]["2026-03"][0]
+        self.assertAlmostEqual(march_item["pnl"], -3465.0)
+        self.assertAlmostEqual(march_item["capital"], 35063.87)
+        self.assertAlmostEqual(march_item["rate"], -3465.0 / 35063.87 * 100)
 
     def test_holding_float_uses_trade_cost_as_curve_baseline(self):
         row = stock_row()

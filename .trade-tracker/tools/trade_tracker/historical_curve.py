@@ -1065,8 +1065,11 @@ def add_stock_snapshot_value(
     currency_raw: str,
     amount: float,
     capital: float = 0.0,
+    market_value: float = 0.0,
 ) -> None:
-    if not ticker or not currency or abs(amount) <= EPSILON:
+    if not ticker or not currency:
+        return
+    if abs(amount) <= EPSILON and abs(capital) <= EPSILON and abs(market_value) <= EPSILON:
         return
     key = (ticker, currency)
     item = bucket.get(key)
@@ -1083,6 +1086,8 @@ def add_stock_snapshot_value(
     item["value"] = float(item.get("value") or 0.0) + float(amount)
     if capital and capital > EPSILON:
         item["capital"] = float(item.get("capital") or 0.0) + float(capital)
+    if market_value and abs(market_value) > EPSILON:
+        item["market_value"] = float(item.get("market_value") or 0.0) + abs(float(market_value))
 
 
 def cny_rate_for_currency(currency: str, rates: dict[str, float]) -> float:
@@ -1133,6 +1138,40 @@ def build_performance_stock_payload(
             }
         )
 
+    def snapshot_float(item: dict[str, object] | None, key: str) -> float:
+        if not item:
+            return 0.0
+        try:
+            return float(item.get(key) or 0.0)
+        except (TypeError, ValueError):
+            return 0.0
+
+    def snapshot_market_value(item: dict[str, object] | None) -> float:
+        if not item:
+            return 0.0
+        market_value = abs(snapshot_float(item, "market_value"))
+        if market_value > EPSILON:
+            return market_value
+        capital = snapshot_float(item, "capital")
+        value = snapshot_float(item, "value")
+        implied_market_value = abs(capital + value)
+        return implied_market_value if implied_market_value > EPSILON else abs(capital)
+
+    def period_return_capital(
+        base: tuple[date, dict[str, object]] | None,
+        end_item: dict[str, object],
+    ) -> float:
+        end_capital = abs(snapshot_float(end_item, "capital"))
+        if not base:
+            return end_capital
+        base_item = base[1]
+        base_capital = abs(snapshot_float(base_item, "capital"))
+        added_capital = max(0.0, end_capital - base_capital)
+        base_market_value = snapshot_market_value(base_item)
+        if base_market_value > EPSILON:
+            return base_market_value + added_capital
+        return end_capital
+
     months: dict[str, list[dict[str, object]]] = {}
     years: dict[str, list[dict[str, object]]] = {}
     for entries in history_by_stock.values():
@@ -1155,16 +1194,12 @@ def build_performance_stock_payload(
         for month, (_day, end_item) in month_last.items():
             base = month_base.get(month)
             base_value = float((base[1].get("value") if base else 0.0) or 0.0)
-            base_capital = float((base[1].get("capital") if base else 0.0) or 0.0)
-            end_capital = float(end_item.get("capital") or 0.0)
-            add_period(months, month, end_item, float(end_item.get("value") or 0.0) - base_value, max(base_capital, end_capital))
+            add_period(months, month, end_item, float(end_item.get("value") or 0.0) - base_value, period_return_capital(base, end_item))
 
         for year, (_day, end_item) in year_last.items():
             base = year_base.get(year)
             base_value = float((base[1].get("value") if base else 0.0) or 0.0)
-            base_capital = float((base[1].get("capital") if base else 0.0) or 0.0)
-            end_capital = float(end_item.get("capital") or 0.0)
-            add_period(years, year, end_item, float(end_item.get("value") or 0.0) - base_value, max(base_capital, end_capital))
+            add_period(years, year, end_item, float(end_item.get("value") or 0.0) - base_value, period_return_capital(base, end_item))
 
     for periods in (months, years):
         for key, items in list(periods.items()):
@@ -1331,6 +1366,7 @@ def build_historical_curve_series(core, rows: list[tuple[int, dict[int, object]]
                     currency_raw=lot.currency_raw,
                     amount=floating,
                     capital=lot.capital,
+                    market_value=price * abs(lot.quantity),
                 )
             if not has_active_position and not has_priced_position and not closed_on_day and not event_on_day:
                 continue

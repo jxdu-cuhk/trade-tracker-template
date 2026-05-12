@@ -1,43 +1,87 @@
 ---
 name: leek-ledger
-description: Use this skill when maintaining Leek Ledger, importing broker trade exports into the workbook, regenerating the local HTML preview, or preparing a privacy-safe public release with no personal trading data.
+description: Use this skill when maintaining Leek Ledger, recording trades from user instructions, screenshots, or broker exports, refreshing the local dashboard, or keeping the public template and private ledger workflows consistent without exposing personal trading data.
 ---
 
 # 韭菜账本 Leek Ledger
 
-## Core workflow
+## Working stance
 
-1. Work from the repository root.
-2. Keep personal trading data in a private copy only.
-3. Use `Trade Tracker.xlsx` as the workbook source of truth.
-4. Regenerate the preview with `Update Preview.command`, or run `python3 .trade-tracker/tools/export_trade_tracker_html.py`.
-5. Check `Trade Tracker.html` and `.trade-tracker/preview/index.html` after changes.
-6. Run focused tests before a full refresh when changing data logic: `python3 -m unittest discover -s .trade-tracker/tests -v`.
+The user usually knows which positions are current, which are closed, and which trades should be added. Treat those instructions as the source of truth. Do not spend a long time re-deriving portfolio intent from the dashboard when the user has already said what to record.
+
+Default loop: listen carefully, extract the needed fields, search only for missing ticker/name/market details, append the workbook rows, refresh, and check that the result matches the user's stated intent.
+
+Ask only when a missing value would change the row: trade date, side, ticker, quantity, price, fee, currency, option expiry, strike, option type, multiplier, or whether the trade is open/closed. If a detail is merely descriptive, search or leave it blank rather than blocking.
+
+## Repository rules
+
+- Work from the repository root.
+- Keep this skill privacy-safe and identical in the public template repo and private ledger repo.
+- Public templates must keep `Trade Tracker.xlsx` blank except for headers or intentional template rows.
+- Private repos may contain real workbook data, broker exports, screenshots, logs, and caches, but they must stay private.
+- Do not commit broker exports, screenshots, account files, logs, history folders, local caches, or `security_name_cache.json` to the public repo.
+- Do not write personal holdings, account numbers, broker IDs, screenshots, or exact private portfolio examples into this skill.
 
 ## Data rules
 
-- Public templates must keep `Trade Tracker.xlsx` blank except for header rows.
-- Do not commit broker exports, screenshots, account files, logs, history folders, or local caches.
-- Do not commit `security_name_cache.json`; symbol-name caches belong in private/local use only.
-- For options, closed contracts may be included in realized P/L for the related underlying. Open option legs should remain separate until closed or expired.
-- Open options can display current price, floating P/L, and occupied capital via Futu OpenD when available; if Futu cannot match the option chain, leave current price and floating P/L as `-`.
-- For current holdings, closed stock/ETF trade P/L and closed option P/L can be assigned back to the underlying to adjust displayed holding cost.
+- `Trade Tracker.xlsx` is the workbook source of truth.
+- The main sheet is `交易记录`; optional dividends/corporate actions live in `分红记录` when present.
+- Main row columns are: `类型`, `开仓`, `到期`, `平仓`, `代码`, `事件`, `行权价`, `数量`, `开仓价`, `平仓价`, `费用`, `占用本金`, `盈亏`, `天数`, `日均盈亏`, `收益率`, `年化收益`, `备注`, `乘数`, `币种`, `年份`.
+- Stock/ETF rows normally use `类型=股票`, `事件=现股`.
+- Sold option rows use `类型=卖出`, with `事件=认购` for calls and `事件=认沽` for puts. Bought option rows use `类型=买入`.
+- Open trades leave `平仓` and `平仓价` blank. Closed trades fill the close date and close price when known.
+- For options, use premium per share/unit in `开仓价` and `平仓价`; use contract count in `数量`; use the contract multiplier in `乘数`.
+- Preserve formulas and existing formatting. Formula-derived columns such as P/L, days, returns, and year should be copied from the adjacent pattern or left for the project scripts when that is the established workbook behavior.
+- Closed stock/ETF P/L and closed option P/L can be assigned back to the related underlying for displayed holding-cost adjustment. Open option legs remain separate until closed or expired.
+- Open options may display current price, floating P/L, and occupied capital from public online sources. If a quote cannot be matched, leave current price and floating P/L as `-`; do not block the entry.
 - Use calendar days for holding period calculations unless the user explicitly asks for trading days.
 
-## Importing trades with AI
+## Trade-entry workflow
 
-The intended workflow is to let an AI assistant help turn plain-language orders, broker exports, or screenshots into workbook rows.
+Use this flow for plain-language orders, broker exports, screenshots, or quick corrections.
 
-Ask the user for the minimum fields needed to append a row:
+1. Parse the user's instruction first. If they say a position is current, closed, or to be opened, use that classification.
+2. Build a compact list of rows to add or update. Keep rows grouped by ticker and currency.
+3. Search only to fill gaps such as official name, ticker normalization, market suffix, currency, or option multiplier. Search results must not override user-provided trade facts.
+4. Append or update `Trade Tracker.xlsx`.
+5. Refresh the preview.
+6. Verify the dashboard against the user's expectation: current holdings, closed positions, open option legs, and realized P/L buckets.
+7. Report what changed and any fields that were assumed or left blank.
+
+Minimum fields by row type:
 
 - Stock or ETF buy/sell: action, trade date, ticker, name if known, quantity, price, fee, currency.
 - Short sale: action, open date, ticker, quantity, short price, fee, currency, and whether it is still open.
 - Option trade: open date, expiry date, underlying ticker, option type, strike, contracts, multiplier, premium per share, fee, currency, and close/expiry status if known.
 - Dividend or corporate action: date, ticker, net amount, currency, and note.
 
-When the user provides screenshots, extract the visible values first, then summarize the rows back to the user before writing if any field is ambiguous. If a broker export is provided, ignore cash transfers, collateral transfers, and other non-trading ledger events unless the user explicitly asks to track them.
+When the user provides screenshots, extract visible values first. If the screenshot is complete enough, record directly; only summarize back before writing when a field is ambiguous or conflicts with the user's typed instruction.
 
-Append confirmed trades to `Trade Tracker.xlsx`, keeping raw user files outside the repository. Formula-derived columns such as P/L, days, annualized return, summaries, and dashboard metrics should be calculated by the project scripts where possible instead of manually typed.
+If a broker export is provided, ignore cash transfers, collateral transfers, funding records, interest, and other non-trading ledger events unless the user explicitly asks to track them.
+
+## Refresh and validation
+
+Regenerate the preview with `Update Preview.command`, the webpage refresh button, or:
+
+```bash
+python3 .trade-tracker/tools/export_trade_tracker_html.py
+```
+
+After importing, check:
+
+1. New rows appear in the transaction timeline.
+2. Current holdings match the user's stated current positions.
+3. Positions the user said are closed no longer appear as open holdings.
+4. Open options match the user's stated open contracts and expiry dates.
+5. Realized P/L only includes closed trades and expired/closed options.
+
+When changing code or data logic, run focused tests before a full refresh:
+
+```bash
+python3 -m unittest discover -s .trade-tracker/tests -v
+```
+
+## Examples
 
 Example user input:
 
@@ -46,12 +90,15 @@ Buy, 2026-01-15, TICKER_A, 100 shares, 12.34, fee 1.23, CNY
 Covered call, 2026-01-16, expiry 2026-01-30, TICKER_A, call, strike 13.00, 1 contract, premium 0.20/share, fee 3.00, CNY
 ```
 
-After importing, regenerate the preview and verify:
+Preferred behavior: turn these into workbook rows, search the missing display name if needed, refresh, then confirm the holding and open option are visible.
 
-1. New rows appear in the transaction timeline.
-2. Current holdings and open options match the user's expectation.
-3. Realized P/L only includes closed trades and expired/closed options.
-4. Public-template privacy checks still pass before any public push.
+Example correction:
+
+```text
+These three are already closed; this one is still current; add the new put I sold today.
+```
+
+Preferred behavior: trust the classification, update close fields or append open rows accordingly, and use the dashboard only as verification.
 
 ## Privacy check before publishing
 
@@ -71,4 +118,5 @@ Inspect the workbook and confirm every sheet has only the header row or intentio
 
 - The public repository contains the app code, empty workbook, preview files, README, tests, and this skill.
 - The private repository may contain real local data, but must stay private.
+- This skill is the same in both repos.
 - After pushing, clone the public repository fresh and repeat the privacy checks against the remote copy.
