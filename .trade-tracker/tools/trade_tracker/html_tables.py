@@ -17,6 +17,7 @@ OPEN_OPTION_COLUMN_ORDER = [
     "名称",
     "类型",
     "事件",
+    "开仓日",
     "到期日",
     "行权价",
     "数量",
@@ -264,6 +265,7 @@ def table_header_html(label: str) -> str:
         "名称": ("text", "text"),
         "类型": ("text", "text"),
         "事件": ("text", "text"),
+        "开仓日": ("text", "date"),
         "到期日": ("text", "date"),
         "行权价": ("text", "text"),
         "数量": ("num", "number"),
@@ -307,6 +309,7 @@ def default_td_for_label(label: str, value: str = "-") -> str:
         "名称": "text",
         "类型": "text",
         "事件": "text",
+        "开仓日": "text",
         "到期日": "text",
         "行权价": "text",
         "数量": "num",
@@ -658,6 +661,7 @@ def normalize_legacy_open_option_table(core, table_html: str) -> str:
         qty = abs(raw_qty) if raw_qty is not None else None
         trade_type = text_for_label(labels, cells, "类型") or ("卖出" if raw_qty is not None and raw_qty < 0 else "买入")
         event = text_for_label(labels, cells, "事件")
+        open_date = text_for_label(labels, cells, "开仓日", "开仓", "开仓日期")
         expiry = text_for_label(labels, cells, "到期日", "到期")
         strike = number_for_label(labels, cells, "行权价")
         multiplier = number_for_label(labels, cells, "乘数") or 100
@@ -681,6 +685,9 @@ def normalize_legacy_open_option_table(core, table_html: str) -> str:
         mark_current_price = mark.get("current_price")
         mark_float_pnl = mark.get("float_pnl")
         mark_capital = mark.get("capital")
+        mark_open_date = mark.get("open_date")
+        if mark_open_date and mark_open_date != "-":
+            open_date = mark_open_date
         if mark_current_price and mark_current_price != "-":
             current_price = parse_float(mark_current_price)
         if mark_float_pnl and mark_float_pnl != "-":
@@ -699,6 +706,7 @@ def normalize_legacy_open_option_table(core, table_html: str) -> str:
             "名称": td_for_label("名称", name or "-"),
             "类型": td_for_label("类型", trade_type),
             "事件": td_for_label("事件", event or "-"),
+            "开仓日": td_for_label("开仓日", open_date or "-"),
             "到期日": td_for_label("到期日", expiry or "-"),
             "行权价": td_for_label("行权价", format_compact_number(strike), strike),
             "数量": td_for_label("数量", format_compact_number(qty), qty),

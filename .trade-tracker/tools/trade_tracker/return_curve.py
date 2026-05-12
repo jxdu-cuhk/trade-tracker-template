@@ -768,13 +768,17 @@ def render_curve_script(payload: list[dict[str, object]]) -> str:
                     }});
                     if (result) {{
                       result.durationDays = daysBetween(result.peak, result.trough);
-                      const recovery = (points || []).slice(result.troughIndex + 1).find((point) => {{
+                      let recovery = null;
+                      (points || []).slice(result.troughIndex + 1).forEach((point) => {{
+                        let recovered = false;
                         if (result.mode === 'amount') {{
                           const amount = Number(point?.amountValue);
-                          return Number.isFinite(amount) && amount >= result.peakAmount;
+                          recovered = Number.isFinite(amount) && amount >= result.peakAmount;
+                        }} else {{
+                          const nav = drawdownNav(point);
+                          recovered = Number.isFinite(nav) && nav >= result.peakNav;
                         }}
-                        const nav = drawdownNav(point);
-                        return Number.isFinite(nav) && nav >= result.peakNav;
+                        recovery = recovered ? (recovery || point) : null;
                       }});
                       if (recovery) {{
                         result.recovery = recovery;

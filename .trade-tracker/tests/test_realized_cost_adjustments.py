@@ -36,6 +36,7 @@ from trade_tracker.html_tables import (
     normalize_legacy_open_option_table,
     normalize_legacy_open_option_sections,
 )
+from trade_tracker.holdings_daily import apply_segmented_daily_pnl
 from trade_tracker.dividends import DIVIDEND_SHEET_NAME, load_dividend_events, load_workbook_dividend_events
 from trade_tracker.options import build_stock_realized_income_maps, open_option_mark_for_row, patch_dashboard_data_with_options
 from trade_tracker import state
@@ -268,6 +269,106 @@ class RealizedCostAdjustmentTests(unittest.TestCase):
         self.assertEqual(patched["annual_summary"][0]["total_pnl"], "人民币 1,895.00")
         self.assertEqual(patched["annual_summary"][1]["total_pnl"], "人民币 -50.00")
 
+    def test_segmented_daily_pnl_uses_entry_price_for_today_lots(self):
+        today = date(2026, 5, 11)
+        rows = [
+            (
+                2,
+                row(
+                    kind="股票",
+                    open_date=today,
+                    ticker="SOXL",
+                    event="现股",
+                    qty=36,
+                    open_price=187.49,
+                    fee=2.10,
+                    capital=6749.64,
+                    currency="美元",
+                ),
+            ),
+            (
+                3,
+                row(
+                    kind="股票",
+                    open_date=today,
+                    ticker="SOXL",
+                    event="现股",
+                    qty=1,
+                    open_price=186.81,
+                    fee=1.99,
+                    capital=186.81,
+                    currency="美元",
+                ),
+            ),
+        ]
+        data = {
+            "holdings": [
+                {
+                    "ticker": "SOXL",
+                    "currency": "美元",
+                    "qty": "37",
+                    "last_price": "美元 187.00",
+                    "daily_pnl": "美元 120.00",
+                }
+            ],
+            "daily_pnl_text": "美元 120.00",
+        }
+
+        patched = apply_segmented_daily_pnl(FakeCore(), rows, data, today=today)
+
+        self.assertEqual(patched["holdings"][0]["daily_pnl"], "美元 -21.54")
+        self.assertEqual(patched["daily_pnl_text"], "美元 -21.54")
+
+    def test_segmented_daily_pnl_keeps_prev_close_move_for_old_lots(self):
+        today = date(2026, 5, 11)
+        rows = [
+            (
+                2,
+                row(
+                    kind="股票",
+                    open_date=date(2026, 5, 8),
+                    ticker="DEMO",
+                    event="现股",
+                    qty=100,
+                    open_price=10,
+                    fee=1,
+                    capital=1001,
+                    currency="美元",
+                ),
+            ),
+            (
+                3,
+                row(
+                    kind="股票",
+                    open_date=today,
+                    ticker="DEMO",
+                    event="现股",
+                    qty=10,
+                    open_price=13,
+                    fee=0.5,
+                    capital=130.5,
+                    currency="美元",
+                ),
+            ),
+        ]
+        data = {
+            "holdings": [
+                {
+                    "ticker": "DEMO",
+                    "currency": "美元",
+                    "qty": "110",
+                    "last_price": "美元 12.00",
+                    "daily_pnl": "美元 220.00",
+                }
+            ],
+            "daily_pnl_text": "美元 220.00",
+        }
+
+        patched = apply_segmented_daily_pnl(FakeCore(), rows, data, today=today)
+
+        self.assertEqual(patched["holdings"][0]["daily_pnl"], "美元 189.50")
+        self.assertEqual(patched["daily_pnl_text"], "美元 189.50")
+
     def test_dividend_income_reduces_current_holding_cost_without_double_counting(self):
         current_year = str(date.today().year)
         data = {
@@ -484,6 +585,7 @@ class RealizedCostAdjustmentTests(unittest.TestCase):
         self.assertEqual(mark["float_pnl"], "28.00")
         self.assertEqual(mark["float_pnl_class"], "value-positive")
         self.assertEqual(mark["capital"], "1,000.00")
+        self.assertEqual(mark["open_date"], "2026/04/28")
 
     def test_open_cash_secured_put_exposure_merges_into_underlying_holding(self):
         open_put = row(
@@ -985,7 +1087,7 @@ class RealizedCostAdjustmentTests(unittest.TestCase):
         """
         normalized = normalize_legacy_open_option_sections(FakeCore(), html)
 
-        for header in ("名称", "类型", "到期日", "乘数", "浮动盈亏", "占用本金", "币种"):
+        for header in ("名称", "类型", "开仓日", "到期日", "乘数", "浮动盈亏", "占用本金", "币种"):
             self.assertIn(f">{header}</th>", normalized)
         self.assertIn(">卖出</td>", normalized)
         self.assertIn(">3</td>", normalized)
@@ -1011,6 +1113,7 @@ class RealizedCostAdjustmentTests(unittest.TestCase):
                 "float_pnl": "814.50",
                 "float_pnl_class": "value-positive",
                 "capital": "196,060.00",
+                "open_date": "2026/05/08",
             }
         }
         try:
@@ -1018,6 +1121,7 @@ class RealizedCostAdjustmentTests(unittest.TestCase):
         finally:
             state.OPEN_OPTION_MARKS = previous
 
+        self.assertIn(">2026/05/08</td>", normalized)
         self.assertIn(">0.38</td>", normalized)
         self.assertIn(">814.50</td>", normalized)
         self.assertIn(">196,060.00</td>", normalized)

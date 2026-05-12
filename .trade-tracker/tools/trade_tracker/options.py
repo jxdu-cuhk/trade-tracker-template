@@ -110,8 +110,10 @@ def open_option_mark_for_row(core, cells: dict[int, object], quote_cache: dict[t
         if isinstance(current_price, (int, float))
         else None
     )
+    open_date = excel_serial_to_date(cell_raw(cells, 2))
 
     mark = {
+        "open_date": open_date.strftime("%Y/%m/%d") if open_date else "-",
         "current_price": f"{float(current_price):,.3f}".rstrip("0").rstrip(".") if isinstance(current_price, (int, float)) else "-",
         "float_pnl": f"{pnl:,.2f}" if pnl is not None else "-",
         "float_pnl_class": option_tone_class(pnl),

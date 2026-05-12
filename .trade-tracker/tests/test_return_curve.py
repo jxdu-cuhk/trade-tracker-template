@@ -122,6 +122,7 @@ class ReturnCurveTests(unittest.TestCase):
         self.assertIn("activeAssists", html)
         self.assertIn("root.addEventListener('click'", html)
         self.assertIn("maxDrawdownFor", html)
+        self.assertIn("recovery = recovered ? (recovery || point) : null", html)
         self.assertIn("maxGrowthFor", html)
         self.assertIn("data-curve-drawdown-band", html)
         self.assertIn("data-curve-growth-band", html)
