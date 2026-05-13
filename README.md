@@ -16,11 +16,43 @@
 
 原始 Google 表格模板：[Ultimate Options Tracking Spreadsheet - Version 2](https://docs.google.com/spreadsheets/d/1Oe_ETcQWmCRg07Vc_hJb8wrnGS8GGR5yclYFnRpmcd4/copy)
 
+## 现在能看什么
+
+看板以 `Trade Tracker.xlsx` 为唯一数据源，刷新后生成 `Trade Tracker.html`。
+
+主要页面包括：
+
+- 当前持仓：按持仓绝对值排序，展示持仓总资产、总盈亏、总市值、当日持仓浮盈变动、已实现盈亏等。
+- 未平仓期权：展示 short put / covered call 等未平仓期权，匹配现价、浮动盈亏、占用本金和到期信息。
+- 盈亏日历 / 阶段账单：按日期和区间看已实现盈亏。
+- 清仓分析：复盘已清仓标的和交易结果。
+- 期权收益分析：拆分期权相关收益、归因和现金占用。
+- 总体概览：汇总资产、盈亏、交易费用和分币种口径。
+- 总收益曲线：看账户曲线、市场基准、超额收益和 K 线视图。
+- 收益报告、分年度个股汇总、交易时间线、工作表入口等辅助页面。
+
+## 总收益曲线
+
+总收益曲线支持这些交互：
+
+- 支持 `汇总 / A股 / 港股 / 美股` 切换，每次只展示一个范围。
+- 支持统一口径切换：人民币、港币、美元。
+- 基准指数覆盖 A 股、港股、美股常见指数，包括上证、深证、创业板、上证50、沪深300、中证500、科创综指、科创50、恒指、恒科、国企、标普500、纳指、道指、罗素2000。
+- 支持收益率和盈亏金额两种口径。
+- 支持超额收益曲线，用账户收益减去当前 baseline。
+- 账户收益率按日频 TWR 思路计算：每天单独计算收益率，再逐日连乘；净买入/卖出会作为外部资金流处理，避免把入金误算成收益。
+- 盈亏金额对比会按账户资金规模折算 baseline，不再用指数自己的点位金额。
+- 支持折线图和 K 线图。K 线图保留周 K、月 K、年 K，支持鼠标滚轮按时间轴缩放、拖动平移。
+- K 线 tooltip 显示当前蜡烛的开盘、最高、最低、收盘、区间变化和振幅。
+- 可选辅助分析：极值分析、最大增长、最大回撤；回撤区间用绿色，增长区间用黄色。
+- 可以点击眼睛隐藏金额，只保留收益率。
+
 ## 使用方式
 
 1. 打开 `Trade Tracker.xlsx`，可以先查看内置合成示例；正式使用前清空 `交易记录` 工作表里的示例行，再录入自己的交易。
 2. 双击 `Update Preview.command` 启动本地预览服务。
-3. 打开 `Trade Tracker.html` 查看生成后的看板。
+3. 浏览器会打开本地看板；也可以手动打开 `Trade Tracker.html`。
+4. 保持 `Update Preview.command` 弹出的终端窗口打开，网页里的“刷新看板”按钮才能调用本地刷新服务。
 
 工作簿和入口文件暂时保留 `Trade Tracker` 文件名，是为了兼容原始模板和现有启动脚本；项目名称统一为「韭菜账本 Leek Ledger」。
 
@@ -28,15 +60,51 @@
 
 最推荐在 AI 编程工具里打开本文件夹，让 Codex、Claude 等工具帮你安装依赖、导入交易和刷新看板；这也是本项目最适合的使用方式，尤其适合多币种、多账户、交易记录来源比较分散的人。
 
-不用 AI 也可以直接在本文件夹执行下面的一键配置命令，安装本地预览服务和所需 Python 依赖：
+最简单：
+
+```text
+双击 Update Preview.command
+```
+
+新的启动脚本会做这些自检：
+
+- 检查 `Trade Tracker.xlsx`、生成器和预览服务是否存在。
+- 自动创建 `.venv` 虚拟环境。
+- 自动安装或补齐 `openpyxl`、`pandas`。
+- 优先寻找能读取仓库内置看板核心的 Python；当前发布包建议使用 Python 3.14。
+- 启动 `http://127.0.0.1:8765/preview/index.html`。
+- 失败时给出中文错误和日志目录。
+
+如果双击仍然失败，可以在终端里进入本目录运行：
+
+```bash
+./Update\ Preview.command
+```
+
+只想手动生成一次静态网页，可以运行：
+
+```bash
+.venv/bin/python .trade-tracker/tools/export_trade_tracker_html.py
+```
+
+想注册为 macOS 后台常驻服务，可以运行：
 
 ```bash
 python3 .trade-tracker/tools/install_preview_service.py
 ```
 
-如果只想临时运行，也可以双击 `Update Preview.command`。保持弹出的终端窗口打开后，网页里的刷新按钮才能调用本地服务。
+后台服务成功后，网页里的刷新按钮不需要依赖终端窗口。
 
-刷新看板时会优先用公开在线行情源批量更新现股和期权价格：现股优先走腾讯批量行情，东方财富和 Yahoo 补充缺失标的；港股期权会尝试走 HKEX 延迟 Bid/Ask 中点。不需要安装或打开本地行情客户端。未平仓 covered call / cash-secured put 会展示现价、浮动盈亏和占用本金；取不到期权行情时会显示 `-`，不会阻塞页面生成。
+## 行情和缓存
+
+刷新看板时会优先用公开在线行情源批量更新现股和期权价格：
+
+- 现股优先走腾讯批量行情，东方财富和 Yahoo 补充缺失标的。
+- 港股期权会尝试走 HKEX 延迟 Bid/Ask 中点。
+- 指数历史行情会缓存到 `.trade-tracker/tools/cache/benchmark_history.json`。
+- 个股真实历史行情会缓存到 `.trade-tracker/tools/cache/security_history.json`。
+
+不需要安装或打开本地行情客户端。取不到行情时会尽量显示已有缓存或 `-`，不会阻塞整个页面生成。
 
 看板会按币种分别展示总盈亏、收益率、持仓市值和当日盈亏，也会提供人民币折算汇总，适合把多个券商账户、多个市场放在同一套口径下复盘。
 
@@ -63,14 +131,20 @@ python3 .trade-tracker/tools/install_preview_service.py
 核心数据逻辑可以先跑单元测试，不必每次完整刷新网页：
 
 ```bash
-python3 -m unittest discover -s .trade-tracker/tests -v
+.venv/bin/python -m unittest discover -s .trade-tracker/tests -v
+```
+
+手动生成静态网页：
+
+```bash
+.venv/bin/python .trade-tracker/tools/export_trade_tracker_html.py
 ```
 
 ## 目录说明
 
 - `Trade Tracker.xlsx`: 带合成示例的交易记录模板，用来展示完整看板外观。
 - `Trade Tracker.html`: 看板入口页。
-- `Update Preview.command`: 本地预览服务启动脚本。
+- `Update Preview.command`: 推荐的一键启动入口，会自动检查虚拟环境和依赖。
 - `.trade-tracker/tools/`: 看板生成和刷新脚本。
 - `.trade-tracker/tests/`: 轻量单元测试，覆盖成本回冲等核心数据点。
 - `.trade-tracker/preview/`: 由合成示例模板生成的静态预览。

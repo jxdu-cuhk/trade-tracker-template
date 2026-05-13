@@ -912,7 +912,7 @@ class RealizedCostAdjustmentTests(unittest.TestCase):
         self.assertEqual(yahoo_quote["prev_close"], 270.17)
 
     def test_runtime_and_option_quotes_use_public_sources_only(self):
-        self.assertEqual(RUNTIME_PACKAGES, ["openpyxl==3.1.5", "pandas==3.0.2"])
+        self.assertEqual(RUNTIME_PACKAGES, ["openpyxl>=3.1,<4", "pandas>=2.2,<4"])
         with patch("trade_tracker.market_data.fetch_hkex_option_quote", return_value=None):
             self.assertIsNone(fetch_option_quote(FakeCore(), "DEMO", "港币", "认购", "2026-05-28", 32))
         with patch(

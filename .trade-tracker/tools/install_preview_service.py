@@ -17,6 +17,8 @@ from urllib.request import urlopen
 LABEL = "com.leek-ledger.preview"
 HOST = "127.0.0.1"
 PORT = "8765"
+
+
 def resolve_project_root() -> Path:
     script_path = Path(__file__).resolve()
     if script_path.parent.name == "tools" and script_path.parent.parent.name == ".trade-tracker":
@@ -28,6 +30,7 @@ PROJECT_ROOT = resolve_project_root()
 APP_DIR = PROJECT_ROOT / ".trade-tracker"
 TOOLS_DIR = APP_DIR / "tools"
 SERVER_SCRIPT = TOOLS_DIR / "preview_server.py"
+CORE_PYC = TOOLS_DIR / "export_trade_tracker_core.pyc"
 RUNTIME_DIR = Path.home() / "Library" / "Application Support" / "TradeTracker"
 RUNTIME_SERVER_SCRIPT = RUNTIME_DIR / "preview_server.py"
 RUNTIME_VENV = RUNTIME_DIR / ".venv"
@@ -37,17 +40,78 @@ LAUNCH_AGENTS_DIR = Path.home() / "Library" / "LaunchAgents"
 PLIST_PATH = LAUNCH_AGENTS_DIR / f"{LABEL}.plist"
 PING_URL = f"http://{HOST}:{PORT}/api/ping"
 RUNTIME_PACKAGES = [
-    "openpyxl==3.1.5",
-    "pandas==3.0.2",
+    "openpyxl>=3.1,<4",
+    "pandas>=2.2,<4",
 ]
-
-
-def base_python() -> Path:
-    return Path(shutil.which("python3") or sys.executable)
 
 
 def run(command: list[str], check: bool = False) -> subprocess.CompletedProcess[str]:
     return subprocess.run(command, check=check, text=True, capture_output=True)
+
+
+def optional_path(value: str | None) -> Path | None:
+    return Path(value) if value else None
+
+
+def python_candidates() -> list[Path]:
+    raw_candidates = [
+        RUNTIME_PYTHON,
+        Path("/opt/homebrew/bin/python3.14"),
+        Path("/usr/local/bin/python3.14"),
+        optional_path(shutil.which("python3.14")),
+        Path("/opt/homebrew/bin/python3"),
+        Path("/usr/local/bin/python3"),
+        Path("/usr/bin/python3"),
+        optional_path(shutil.which("python3")),
+        Path(sys.executable),
+    ]
+    candidates: list[Path] = []
+    seen: set[Path] = set()
+    for candidate in raw_candidates:
+        if candidate is None:
+            continue
+        resolved = candidate.expanduser()
+        if resolved in seen:
+            continue
+        seen.add(resolved)
+        candidates.append(resolved)
+    return candidates
+
+
+def python_version_ok(python: Path) -> bool:
+    if not python.exists():
+        return False
+    result = run(
+        [
+            str(python),
+            "-c",
+            "import sys; raise SystemExit(0 if sys.version_info >= (3, 10) else 1)",
+        ]
+    )
+    return result.returncode == 0
+
+
+def python_can_load_core(python: Path) -> bool:
+    if not python.exists() or not CORE_PYC.exists():
+        return False
+    result = run(
+        [
+            str(python),
+            "-c",
+            "import importlib.util; print(importlib.util.MAGIC_NUMBER.hex())",
+        ]
+    )
+    return result.returncode == 0 and result.stdout.strip() == CORE_PYC.read_bytes()[:4].hex()
+
+
+def base_python() -> Path:
+    for candidate in python_candidates():
+        if python_version_ok(candidate) and python_can_load_core(candidate):
+            return candidate
+    raise RuntimeError(
+        "没有找到与看板核心匹配的 Python。当前核心文件由 Python 3.14 生成，"
+        "建议先安装 Python 3.14，例如：brew install python@3.14。"
+    )
 
 
 def ping_preview_service(timeout: float = 0.5) -> bool:
@@ -97,11 +161,23 @@ def runtime_python_has_dependencies() -> bool:
     return result.returncode == 0
 
 
+def runtime_python_can_load_core() -> bool:
+    return python_can_load_core(RUNTIME_PYTHON)
+
+
 def ensure_runtime() -> None:
     RUNTIME_DIR.mkdir(parents=True, exist_ok=True)
     shutil.copy2(SERVER_SCRIPT, RUNTIME_SERVER_SCRIPT)
-    if not RUNTIME_PYTHON.exists():
-        run([str(base_python()), "-m", "venv", str(RUNTIME_VENV)], check=True)
+    runtime_base_python = base_python()
+    if not RUNTIME_PYTHON.exists() or not runtime_python_can_load_core():
+        if RUNTIME_VENV.exists():
+            shutil.rmtree(RUNTIME_VENV)
+        run([str(runtime_base_python), "-m", "venv", str(RUNTIME_VENV)], check=True)
+    if not runtime_python_can_load_core():
+        raise RuntimeError(
+            "当前 Python 无法读取仓库内置的看板核心文件；请换用与本仓库匹配的 Python，"
+            "或重新生成/更新 export_trade_tracker_core.pyc。"
+        )
     if not runtime_python_has_dependencies():
         run(
             [
@@ -173,6 +249,9 @@ def main() -> int:
     if not SERVER_SCRIPT.exists():
         print(f"找不到预览服务脚本：{SERVER_SCRIPT}")
         return 1
+    if not CORE_PYC.exists():
+        print(f"找不到看板核心文件：{CORE_PYC}")
+        return 1
     try:
         write_launch_agent()
         install_launch_agent()
@@ -180,6 +259,10 @@ def main() -> int:
         print("注册本地刷新服务失败。")
         print(error.stderr.strip() or error.stdout.strip() or str(error))
         return error.returncode or 1
+    except RuntimeError as error:
+        print("准备本地刷新服务失败。")
+        print(str(error))
+        return 1
 
     if wait_until_ready():
         print(f"本地刷新服务已常驻：{PING_URL}")
