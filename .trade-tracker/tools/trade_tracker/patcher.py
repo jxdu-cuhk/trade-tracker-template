@@ -44,7 +44,7 @@ from .market_data import (
 from .names import cache_name, load_name_cache, load_workbook_name_map, name_cache_key
 from .option_analysis import insert_option_analysis_section
 from .options import patch_dashboard_data_with_options
-from .overview import move_dividend_metric_later, optimize_overview_metrics, split_overview_by_currency
+from .overview import insert_transaction_fee_metric, move_dividend_metric_later, optimize_overview_metrics, split_overview_by_currency
 from .performance_report import insert_performance_report_section
 from .refresh_panel import add_refresh_progress_panel
 from .realized_analysis import insert_realized_analysis_section
@@ -192,7 +192,9 @@ def patch_core(core, workbook_path: Path) -> None:
         return insert_summary_holding_days_column(html)
 
     def render_dashboard_html(rows):
-        html = optimize_overview_metrics(move_dividend_metric_later(original_render_dashboard_html(rows)))
+        html = move_dividend_metric_later(original_render_dashboard_html(rows))
+        html = insert_transaction_fee_metric(core, rows, html)
+        html = optimize_overview_metrics(html)
         html = split_overview_by_currency(html)
         html = annotate_holdings_fx_note(html)
         html = align_annual_summary_with_stock_summary(html)

@@ -3,9 +3,9 @@ from __future__ import annotations
 import html
 import re
 
-from .market_data import current_fx_rates_to_cny
+from .market_data import current_fx_rates_to_cny, display_currency_label
 from .settings import OVERVIEW_CURRENCIES, OVERVIEW_CURRENCY_METRIC_ORDER, OVERVIEW_HIDDEN_METRICS, OVERVIEW_METRIC_CLASSES, OVERVIEW_METRIC_ORDER
-from .utils import cell_text
+from .utils import cell_raw, cell_text, raw_number
 
 
 OVERVIEW_REPORTING_MONEY_LABELS = {
@@ -15,7 +15,10 @@ OVERVIEW_REPORTING_MONEY_LABELS = {
     "已实现盈亏",
     "持仓浮盈亏",
     "持仓当日盈亏",
+    "交易费用",
 }
+
+TRANSACTION_FEE_LABEL = "交易费用"
 
 
 def move_dividend_metric_later(html: str) -> str:
@@ -159,7 +162,7 @@ def format_overview_metric(label: str, value: float | None) -> tuple[str, str]:
     if value is None:
         return "-", ""
     text = f"{value:,.2f}"
-    if label in {"当前市值", "持仓成本"}:
+    if label in {"当前市值", "持仓成本", "交易费用"}:
         return text, ""
     return text, overview_value_class(value)
 
@@ -180,6 +183,7 @@ def cny_overview_metric_values(values: dict[str, dict[str, tuple[str, str]]]) ->
         "当前市值",
         "持仓成本",
         "已实现盈亏",
+        "交易费用",
         "持仓浮盈亏",
         "持仓当日盈亏",
     ]
@@ -220,6 +224,60 @@ def cny_overview_metric_values(values: dict[str, dict[str, tuple[str, str]]]) ->
     if has_capital_days and converted_capital_days:
         result["综合年化"] = format_overview_percent(total_pnl * 365.0 / converted_capital_days if total_pnl is not None else None)
     return result
+
+
+def transaction_fee_totals_by_currency(core, rows: list[tuple[int, dict[int, object]]]) -> dict[str, float]:
+    totals: dict[str, float] = {}
+    for _row_index, cells in rows or []:
+        if not isinstance(cells, dict):
+            continue
+        fee = raw_number(cells, 11)
+        if fee is None:
+            continue
+        fee = abs(float(fee))
+        if fee < 0.005:
+            continue
+        currency = display_currency_label(core, cell_raw(cells, 20)) or "人民币"
+        totals[currency] = totals.get(currency, 0.0) + fee
+    return totals
+
+
+def render_transaction_fee_metric_card(totals: dict[str, float]) -> str:
+    ordered_currencies = [currency for currency in OVERVIEW_CURRENCIES if currency in totals]
+    ordered_currencies.extend(currency for currency in sorted(totals) if currency not in ordered_currencies)
+    segments = [
+        f'<span class="metric-segment">{html.escape(currency)} {totals[currency]:,.2f}</span>'
+        for currency in ordered_currencies
+        if abs(totals[currency]) >= 0.005
+    ]
+    if not segments:
+        return ""
+    separator = '<span class="metric-separator"> / </span>'
+    return (
+        '<div class="metric-card">'
+        f'<div class="metric-label">{TRANSACTION_FEE_LABEL}</div>'
+        f'<div class="metric-value metric-value-wide">{separator.join(segments)}</div>'
+        '<div class="metric-note">来自交易流水“费用”列，按币种累计。</div>'
+        '</div>'
+    )
+
+
+def insert_transaction_fee_metric(core, rows: list[tuple[int, dict[int, object]]], html_text: str) -> str:
+    if f'<div class="metric-label">{TRANSACTION_FEE_LABEL}</div>' in html_text:
+        return html_text
+    totals = transaction_fee_totals_by_currency(core, rows)
+    card_html = render_transaction_fee_metric_card(totals)
+    if not card_html:
+        return html_text
+    grid_match = re.search(r"<div class=\"dashboard-grid\">", html_text)
+    if not grid_match:
+        return html_text
+    grid_body_start = grid_match.end()
+    grid_bounds = find_matching_div_bounds(html_text, grid_body_start)
+    if not grid_bounds:
+        return html_text
+    grid_body_end, _grid_close_end = grid_bounds
+    return html_text[:grid_body_end] + "\n" + card_html + html_text[grid_body_end:]
 
 
 def render_currency_overview_card(

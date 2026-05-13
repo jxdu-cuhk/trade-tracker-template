@@ -60,6 +60,7 @@ OVERVIEW_METRIC_ORDER = [
     "持仓浮盈亏",
     "持仓当日盈亏",
     "已实现盈亏",
+    "交易费用",
     "当前持仓标的",
     "未平仓期权腿",
     "最近交易日期",
@@ -75,6 +76,7 @@ OVERVIEW_METRIC_CLASSES = {
     "持仓浮盈亏": "metric-card-broad",
     "持仓当日盈亏": "metric-card-broad",
     "已实现盈亏": "metric-card-broad",
+    "交易费用": "metric-card-broad",
     "当前持仓标的": "metric-card-mini",
     "未平仓期权腿": "metric-card-mini",
     "最近交易日期": "metric-card-mini",
@@ -113,6 +115,7 @@ OVERVIEW_CURRENCY_METRIC_ORDER = [
     "当前市值",
     "持仓成本",
     "已实现盈亏",
+    "交易费用",
     "持仓浮盈亏",
     "持仓当日盈亏",
 ]

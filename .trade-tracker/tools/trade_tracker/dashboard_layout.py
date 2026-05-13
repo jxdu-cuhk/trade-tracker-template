@@ -368,6 +368,15 @@ def render_ths_curve_top(total_pnl: str, return_rate: str) -> str:
     rate_class = value_tone_class(rate_text)
     return f"""
             <div class="ths-curve-hero">
+              <button type="button" class="ths-curve-privacy-toggle" data-curve-money-toggle aria-pressed="false" aria-label="隐藏金额" title="隐藏金额">
+                <svg viewBox="0 0 24 24" aria-hidden="true">
+                  <path class="eye-open" d="M2.8 12s3.3-5.2 9.2-5.2S21.2 12 21.2 12s-3.3 5.2-9.2 5.2S2.8 12 2.8 12Z"></path>
+                  <circle class="eye-open" cx="12" cy="12" r="2.6"></circle>
+                  <path class="eye-off" d="M4.2 4.2 19.8 19.8"></path>
+                  <path class="eye-off" d="M7.8 7.4C4.5 8.8 2.8 12 2.8 12s3.3 5.2 9.2 5.2c1.2 0 2.3-.2 3.2-.6"></path>
+                  <path class="eye-off" d="M10.1 6.9c.6-.1 1.2-.1 1.9-.1 5.9 0 9.2 5.2 9.2 5.2s-.9 1.4-2.5 2.8"></path>
+                </svg>
+              </button>
               <div class="ths-curve-kicker" data-curve-hero-kicker>全部盈亏</div>
               <div class="ths-curve-value {html.escape(total_class)}" data-curve-hero-value>{html.escape(total_text)}</div>
               <div class="ths-curve-rate"><span class="ths-curve-badge">账</span> <span data-curve-hero-rate-label>总资产收益率</span> <strong class="{html.escape(rate_class)}" data-curve-hero-rate>{html.escape(rate_text)}</strong></div>
@@ -392,6 +401,9 @@ def render_ths_curve_top(total_pnl: str, return_rate: str) -> str:
             <div class="ths-curve-legend" aria-label="收益曲线图例">
               <span><i class="ths-dot ths-dot-me"></i>汇总</span>
               <span class="ths-curve-benchmark-tabs" data-curve-benchmark-tabs aria-label="选择对比指数"></span>
+              <button type="button" class="ths-curve-series-toggle is-active" data-curve-toggle="excess" aria-pressed="true">
+                <i class="ths-dot ths-dot-excess"></i>超额收益
+              </button>
             </div>
 """
 

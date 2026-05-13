@@ -408,6 +408,7 @@ details[data-ths-return-curve] .section-body {{
 }}
 
 details[data-ths-return-curve] .ths-curve-hero {{
+  position: relative;
   display: grid;
   justify-items: center;
   gap: 9px;
@@ -416,6 +417,65 @@ details[data-ths-return-curve] .ths-curve-hero {{
   background: linear-gradient(180deg, #f72f3a 0%, #ff5a10 100%);
   color: #ffffff;
   padding: 22px 18px 0;
+}}
+
+details[data-ths-return-curve] .ths-curve-privacy-toggle {{
+  position: absolute;
+  top: 14px;
+  right: 16px;
+  display: inline-flex;
+  width: 34px;
+  height: 34px;
+  align-items: center;
+  justify-content: center;
+  border: 1px solid rgba(255, 255, 255, 0.46);
+  border-radius: 999px;
+  background: rgba(255, 255, 255, 0.13);
+  color: #ffffff;
+  cursor: pointer;
+  transition: background 160ms ease, border-color 160ms ease, transform 160ms ease;
+}}
+
+details[data-ths-return-curve] .ths-curve-privacy-toggle:hover,
+details[data-ths-return-curve] .ths-curve-privacy-toggle:focus-visible {{
+  border-color: rgba(255, 255, 255, 0.82);
+  background: rgba(255, 255, 255, 0.22);
+}}
+
+details[data-ths-return-curve] .ths-curve-privacy-toggle:focus-visible {{
+  outline: 2px solid rgba(255, 255, 255, 0.86);
+  outline-offset: 3px;
+}}
+
+details[data-ths-return-curve] .ths-curve-privacy-toggle:active {{
+  transform: scale(0.96);
+}}
+
+details[data-ths-return-curve] .ths-curve-privacy-toggle svg {{
+  width: 18px;
+  height: 18px;
+  fill: none;
+  stroke: currentColor;
+  stroke-width: 1.9;
+  stroke-linecap: round;
+  stroke-linejoin: round;
+}}
+
+details[data-ths-return-curve] .ths-curve-privacy-toggle circle {{
+  fill: currentColor;
+  stroke: none;
+}}
+
+details[data-ths-return-curve] .ths-curve-privacy-toggle .eye-off {{
+  display: none;
+}}
+
+details[data-ths-return-curve] .ths-curve-privacy-toggle.is-hidden .eye-open {{
+  display: none;
+}}
+
+details[data-ths-return-curve] .ths-curve-privacy-toggle.is-hidden .eye-off {{
+  display: block;
 }}
 
 details[data-ths-return-curve] .ths-curve-kicker {{
@@ -642,6 +702,36 @@ details[data-ths-return-curve] .ths-curve-benchmark.is-empty {{
   opacity: 0.58;
 }}
 
+details[data-ths-return-curve] .ths-curve-series-toggle {{
+  appearance: none;
+  display: inline-flex;
+  min-height: 24px;
+  align-items: center;
+  justify-content: flex-start;
+  gap: 6px;
+  border: 0;
+  background: transparent;
+  color: #202124;
+  cursor: pointer;
+  font: inherit;
+  font-size: 13px;
+  font-weight: 900;
+  line-height: 1;
+  padding: 0;
+  white-space: nowrap;
+}}
+
+details[data-ths-return-curve] .ths-curve-series-toggle:not(.is-active) {{
+  color: #9aa0a6;
+  font-weight: 700;
+}}
+
+details[data-ths-return-curve] .ths-curve-series-toggle:focus-visible {{
+  outline: 2px solid rgba(255, 159, 26, 0.28);
+  outline-offset: 4px;
+  border-radius: 4px;
+}}
+
 details[data-ths-return-curve] .ths-dot {{
   width: 8px;
   height: 8px;
@@ -654,6 +744,14 @@ details[data-ths-return-curve] .ths-dot-me {{
 
 details[data-ths-return-curve] .ths-dot-base {{
   background: #4285f4;
+}}
+
+details[data-ths-return-curve] .ths-dot-excess {{
+  background: #ff9f1a;
+}}
+
+details[data-ths-return-curve] .ths-curve-series-toggle:not(.is-active) .ths-dot-excess {{
+  background: #d7d9dc;
 }}
 
 details[data-ths-return-curve] .curve-grid {{
@@ -707,7 +805,7 @@ details[data-ths-return-curve] .curve-svg {{
   display: block;
   width: 100%;
   height: auto;
-  aspect-ratio: 620 / 330;
+  aspect-ratio: 620 / 260;
   margin-top: 2px;
   overflow: visible;
 }}
@@ -746,6 +844,15 @@ details[data-ths-return-curve] .curve-benchmark-line {{
   stroke-linecap: round;
   stroke-linejoin: round;
   stroke: #4285f4;
+}}
+
+details[data-ths-return-curve] .curve-excess-line {{
+  fill: none;
+  stroke-width: 1.25px;
+  stroke-linecap: round;
+  stroke-linejoin: round;
+  stroke-dasharray: 5 3;
+  stroke: #ff9f1a;
 }}
 
 details[data-ths-return-curve] .curve-line {{
@@ -845,7 +952,8 @@ details[data-ths-return-curve] .curve-line-glow {{
 
 details[data-ths-return-curve] .curve-dot,
 details[data-ths-return-curve] .curve-dot-last,
-details[data-ths-return-curve] .curve-benchmark-dot {{
+details[data-ths-return-curve] .curve-benchmark-dot,
+details[data-ths-return-curve] .curve-excess-dot {{
   fill: #ff2f45;
   stroke: #ffffff;
   stroke-width: 1.5px;
@@ -853,6 +961,10 @@ details[data-ths-return-curve] .curve-benchmark-dot {{
 
 details[data-ths-return-curve] .curve-benchmark-dot {{
   fill: #4285f4;
+}}
+
+details[data-ths-return-curve] .curve-excess-dot {{
+  fill: #ff9f1a;
 }}
 
 details[data-ths-return-curve] .curve-hover-capture {{
@@ -882,6 +994,10 @@ details[data-ths-return-curve] .curve-hover-dot-me {{
 
 details[data-ths-return-curve] .curve-hover-dot-base {{
   stroke: #4285f4;
+}}
+
+details[data-ths-return-curve] .curve-hover-dot-excess {{
+  stroke: #ff9f1a;
 }}
 
 details[data-ths-return-curve] .curve-tooltip {{
@@ -1073,6 +1189,13 @@ details[data-ths-return-curve] .curve-label,
 details[data-ths-return-curve] .curve-axis-label {{
   fill: #9aa0a6;
   font-size: 12px;
+}}
+
+details[data-ths-return-curve] [data-curve-start-label],
+details[data-ths-return-curve] [data-curve-end-label] {{
+  fill: #b3b8bd;
+  font-size: 9.5px;
+  font-weight: 600;
 }}
 
 details[data-ths-return-curve] .curve-y-label {{
@@ -2152,6 +2275,13 @@ details[data-ths-return-curve] .ths-curve-bars div:nth-child(2) strong {{
 
   details[data-ths-return-curve] .ths-curve-value {{
     font-size: 34px;
+  }}
+
+  details[data-ths-return-curve] .ths-curve-privacy-toggle {{
+    top: 10px;
+    right: 12px;
+    width: 32px;
+    height: 32px;
   }}
 
   details[data-ths-return-curve] .ths-curve-tabs {{

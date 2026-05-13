@@ -121,6 +121,11 @@ def render_performance_report_section() -> str:
                 return Number.isFinite(parsed) ? parsed : NaN;
               }
 
+              function optionalNumber(value) {
+                if (value === null || value === undefined || value === '') return NaN;
+                return number(value);
+              }
+
               function reportingCurrency() {
                 const label = document.documentElement.dataset.reportingCurrency || '人民币';
                 return ['人民币', '港币', '美元'].includes(label) ? label : '人民币';
@@ -664,7 +669,7 @@ def render_performance_report_section() -> str:
                       pnl: number(item.pnl),
                       nativePnl: number(item.nativePnl),
                       capital: number(item.capital),
-                      rate: number(item.rate),
+                      rate: optionalNumber(item.rate),
                     }))
                     .filter((item) => item.code && Number.isFinite(item.pnl))
                     .sort((a, b) => Math.abs(b.pnl) - Math.abs(a.pnl));
@@ -700,22 +705,31 @@ def render_performance_report_section() -> str:
 
               function stockMetricValue(item) {
                 if (reportMode === 'rate') {
-                  const rate = number(item?.rate);
+                  const rate = optionalNumber(item?.rate);
                   if (Number.isFinite(rate)) return rate;
+                  return NaN;
                 }
-                return number(item?.pnl) || 0;
+                return number(item?.pnl);
               }
 
               function stockMetricText(item) {
-                if (reportMode === 'rate' && Number.isFinite(number(item?.rate))) return percent(number(item.rate));
-                return signedMoney(number(item?.pnl) || 0);
+                const value = stockMetricValue(item);
+                if (!Number.isFinite(value)) return '--';
+                return reportMode === 'rate' ? percent(value) : signedMoney(value);
+              }
+
+              function stockDisplayName(item) {
+                const name = String(item?.name || '').trim();
+                if (name && name !== '-' && name !== '--') return name;
+                return String(item?.code || '').trim() || '--';
               }
 
               function renderRank(title, items, tone) {
-                const rows = items.length ? items.map((item, index) => `
+                const displayItems = items.filter((item) => Number.isFinite(stockMetricValue(item)));
+                const rows = displayItems.length ? displayItems.map((item, index) => `
                   <li>
                     <span>${index + 1}</span>
-                    <strong>${escapeHtml(item.name || item.code)}</strong>
+                    <strong>${escapeHtml(stockDisplayName(item))}</strong>
                     <em class="value-${tone}">${stockMetricText(item)}</em>
                   </li>
                 `).join('') : '<li class="performance-stock-empty">暂无数据</li>';
@@ -783,10 +797,11 @@ def render_performance_report_section() -> str:
                       const item = rect.item;
                       const value = stockMetricValue(item);
                       const tone = value >= 0 ? 'positive' : 'negative';
-                      const title = item.name.length > 10 ? item.name.slice(0, 10) + '...' : item.name;
+                      const displayName = stockDisplayName(item);
+                      const title = displayName.length > 10 ? displayName.slice(0, 10) + '...' : displayName;
                       const currencyLabel = reportMode === 'rate' ? '收益率' : (item.currency ? `${item.currency}折${reportingCurrency()}` : `折${reportingCurrency()}`);
                       const compactClass = rect.width < 14 || rect.height < 16 ? ' is-compact' : rect.width < 22 || rect.height < 20 ? ' is-small' : '';
-                      const fullTitle = `${item.name || item.code} ${stockMetricText(item)}`;
+                      const fullTitle = `${displayName} ${stockMetricText(item)}`;
                       const style = `left:${rect.x.toFixed(2)}%;top:${rect.y.toFixed(2)}%;width:${rect.width.toFixed(2)}%;height:${rect.height.toFixed(2)}%;`;
                       return `<div class="performance-stock-tile performance-stock-${tone}${compactClass}" title="${escapeHtml(fullTitle)}" style="${style}"><span>${escapeHtml(title)}</span><strong>${stockMetricText(item)}</strong><small>${escapeHtml(currencyLabel)}</small></div>`;
                     }).join('') : `<div class="performance-empty">${escapeHtml(contextLabel)}暂无有效个股盈亏。</div>`;

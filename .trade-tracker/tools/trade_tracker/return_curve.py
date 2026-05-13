@@ -546,9 +546,9 @@ def render_curve_card(index: int, series: dict[str, object]) -> str:
                     </div>
                     <div class="curve-badge" data-curve-badge>--</div>
                   </div>
-                  <svg class="curve-svg" viewBox="0 0 620 330" role="img" aria-label="{html.escape(currency)}收益分析曲线">
-                    <line class="curve-axis" x1="34" y1="24" x2="34" y2="282"></line>
-                    <line class="curve-axis" x1="34" y1="282" x2="564" y2="282"></line>
+                  <svg class="curve-svg" viewBox="0 0 620 260" role="img" aria-label="{html.escape(currency)}收益分析曲线">
+                    <line class="curve-axis" x1="34" y1="18" x2="34" y2="236"></line>
+                    <line class="curve-axis" x1="34" y1="236" x2="564" y2="236"></line>
                     <g data-curve-grid-lines></g>
                     <g data-curve-y-labels></g>
                     <g class="curve-extreme-layer" data-curve-extreme-layer>
@@ -557,10 +557,11 @@ def render_curve_card(index: int, series: dict[str, object]) -> str:
                       <text class="curve-extreme-label curve-extreme-label-max" data-curve-extreme-max-label>--</text>
                       <text class="curve-extreme-label curve-extreme-label-min" data-curve-extreme-min-label>--</text>
                     </g>
-                    <line class="curve-zero-line" x1="34" y1="282" x2="564" y2="282" data-curve-zero-line></line>
+                    <line class="curve-zero-line" x1="34" y1="236" x2="564" y2="236" data-curve-zero-line></line>
                     <rect class="curve-drawdown-band" data-curve-drawdown-band></rect>
                     <rect class="curve-growth-band" data-curve-growth-band></rect>
                     <path class="curve-benchmark-line" data-curve-benchmark-line></path>
+                    <path class="curve-excess-line" data-curve-excess-line></path>
                     <path class="curve-area" data-curve-area></path>
                     <path class="curve-line-glow" data-curve-line-glow></path>
                     <path class="curve-line" data-curve-line></path>
@@ -581,11 +582,12 @@ def render_curve_card(index: int, series: dict[str, object]) -> str:
                       <line class="curve-hover-line" data-curve-hover-line></line>
                       <circle class="curve-hover-dot curve-hover-dot-me" data-curve-hover-dot-me></circle>
                       <circle class="curve-hover-dot curve-hover-dot-base" data-curve-hover-dot-base></circle>
+                      <circle class="curve-hover-dot curve-hover-dot-excess" data-curve-hover-dot-excess></circle>
                     </g>
-                    <text class="curve-axis-label" x="34" y="314" text-anchor="start" data-curve-start-label>--</text>
-                    <text class="curve-axis-label" x="564" y="314" text-anchor="end" data-curve-end-label>--</text>
+                    <text class="curve-axis-label" x="34" y="252" text-anchor="start" data-curve-start-label>--</text>
+                    <text class="curve-axis-label" x="564" y="252" text-anchor="end" data-curve-end-label>--</text>
                     <text class="curve-end-value" x="574" y="18" data-curve-end-value>--</text>
-                    <rect class="curve-hover-capture" x="0" y="0" width="620" height="306" data-curve-hover-capture></rect>
+                    <rect class="curve-hover-capture" x="0" y="0" width="620" height="246" data-curve-hover-capture></rect>
                   </svg>
                   <div class="curve-tooltip" data-curve-tooltip hidden></div>
                   <div class="curve-risk-caption" data-curve-drawdown-caption hidden></div>
@@ -616,11 +618,11 @@ def render_curve_script(payload: list[dict[str, object]]) -> str:
 
                   const dims = {{
                     width: 620,
-                    height: 330,
+                    height: 260,
                     left: 34,
                     right: 56,
-                    top: 24,
-                    bottom: 48,
+                    top: 18,
+                    bottom: 24,
                   }};
                   dims.innerWidth = dims.width - dims.left - dims.right;
                   dims.innerHeight = dims.height - dims.top - dims.bottom;
@@ -667,6 +669,55 @@ def render_curve_script(payload: list[dict[str, object]]) -> str:
                     if (!Number.isFinite(value)) return '--';
                     const sign = value > 0 ? '+' : '';
                     return `${{sign}}${{value.toFixed(2)}}%`;
+                  }}
+
+                  const MONEY_PRIVACY_KEY = 'trade-tracker-return-curve-money-hidden-v1';
+                  const MONEY_MASK_TEXT = '******';
+
+                  function moneyHidden() {{
+                    return root.dataset.curveMoneyHidden === '1';
+                  }}
+
+                  function displayMoneyText(value) {{
+                    return moneyHidden() ? MONEY_MASK_TEXT : moneyText(value);
+                  }}
+
+                  function displaySignedMoneyText(value) {{
+                    return moneyHidden() ? MONEY_MASK_TEXT : signedMoneyText(value);
+                  }}
+
+                  function updateMoneyToggleState() {{
+                    const button = root.querySelector('[data-curve-money-toggle]');
+                    if (!button) return;
+                    const hidden = moneyHidden();
+                    button.classList.toggle('is-hidden', hidden);
+                    button.setAttribute('aria-pressed', hidden ? 'true' : 'false');
+                    button.setAttribute('aria-label', hidden ? '显示金额' : '隐藏金额');
+                    button.title = hidden ? '显示金额' : '隐藏金额';
+                  }}
+
+                  function setMoneyHidden(hidden, shouldRedraw = true) {{
+                    root.dataset.curveMoneyHidden = hidden ? '1' : '0';
+                    try {{
+                      window.localStorage?.setItem(MONEY_PRIVACY_KEY, hidden ? '1' : '0');
+                    }} catch (error) {{}}
+                    if (hidden) {{
+                      root.querySelectorAll('.ths-curve-metric').forEach((item) => {{
+                        item.classList.toggle('is-active', item.dataset.curveMetric !== 'amount');
+                      }});
+                    }}
+                    updateMoneyToggleState();
+                    if (shouldRedraw) redraw();
+                  }}
+
+                  function restoreMoneyPrivacy() {{
+                    let hidden = false;
+                    try {{
+                      hidden = window.localStorage?.getItem(MONEY_PRIVACY_KEY) === '1';
+                    }} catch (error) {{
+                      hidden = false;
+                    }}
+                    setMoneyHidden(hidden, false);
                   }}
 
                   function numberFromText(text) {{
@@ -892,11 +943,12 @@ def render_curve_script(payload: list[dict[str, object]]) -> str:
                   }}
 
                   function metricText(value, metric) {{
-                    return metric === 'amount' ? signedMoneyText(value) : percentText(value);
+                    return metric === 'amount' ? displaySignedMoneyText(value) : percentText(value);
                   }}
 
                   function axisText(value, metric) {{
                     if (metric !== 'amount') return percentText(value);
+                    if (moneyHidden()) return '***';
                     if (!Number.isFinite(value)) return '--';
                     const sign = value > 0 ? '+' : '';
                     return `${{sign}}${{compactMoneyText(value)}}`;
@@ -922,6 +974,18 @@ def render_curve_script(payload: list[dict[str, object]]) -> str:
                       const fallback = metric === 'amount' ? 10000 : 1;
                       low -= fallback;
                       high += fallback;
+                    }}
+                    if (metric !== 'amount') {{
+                      const step = niceStep((high - low) / 4);
+                      let niceMin = Math.floor(low / step) * step;
+                      let niceMax = Math.ceil(high / step) * step;
+                      if (niceMin > 0) niceMin = 0;
+                      if (niceMax < 0) niceMax = 0;
+                      const ticks = [];
+                      for (let value = niceMin; value <= niceMax + step / 2; value += step) {{
+                        ticks.push(Math.abs(value) < step / 1000000 ? 0 : value);
+                      }}
+                      return {{ min: niceMin, max: niceMax, ticks }};
                     }}
                     const padding = Math.max((high - low) * 0.08, metric === 'amount' ? 1000 : 0.2);
                     low -= padding;
@@ -978,6 +1042,11 @@ def render_curve_script(payload: list[dict[str, object]]) -> str:
                       extreme: isActive('extreme'),
                       growth: isActive('growth'),
                     }};
+                  }}
+
+                  function excessVisible() {{
+                    const toggle = root.querySelector('[data-curve-toggle="excess"]');
+                    return !toggle || toggle.classList.contains('is-active');
                   }}
 
                   function drawdownNav(point) {{
@@ -1115,6 +1184,7 @@ def render_curve_script(payload: list[dict[str, object]]) -> str:
                       }});
                       if (!selected) return hide();
                       const benchmark = selected.benchmark;
+                      const excess = state.showExcess ? selected.excess : null;
                       if (state.hoverLine) {{
                         state.hoverLine.setAttribute('x1', selected.x.toFixed(2));
                         state.hoverLine.setAttribute('x2', selected.x.toFixed(2));
@@ -1134,6 +1204,14 @@ def render_curve_script(payload: list[dict[str, object]]) -> str:
                         }}
                         setSvgHidden(state.hoverDotBase, !benchmark);
                       }}
+                      if (state.hoverDotExcess) {{
+                        if (excess) {{
+                          state.hoverDotExcess.setAttribute('cx', excess.x.toFixed(2));
+                          state.hoverDotExcess.setAttribute('cy', excess.y.toFixed(2));
+                          state.hoverDotExcess.setAttribute('r', '4.1');
+                        }}
+                        setSvgHidden(state.hoverDotExcess, !excess);
+                      }}
                       setSvgHidden(state.hoverLayer, false);
                       const dailyValue = state.metric === 'amount'
                         ? selected.accountDailyAmount
@@ -1141,16 +1219,25 @@ def render_curve_script(payload: list[dict[str, object]]) -> str:
                       const benchmarkDaily = benchmark
                         ? (state.metric === 'amount' ? benchmark.dailyAmountValue : benchmark.dailyReturn)
                         : NaN;
+                      const excessDaily = excess
+                        ? (state.metric === 'amount' ? excess.dailyAmountValue : excess.dailyReturn)
+                        : NaN;
+                      const excessRows = excess ? `
+                        <div><span>超额</span><strong>${{metricText(excess.value, state.metric)}}</strong></div>
+                        <div class="curve-tooltip-muted"><span>超额当日</span><strong>${{metricText(excessDaily, state.metric)}}</strong></div>
+                      ` : '';
                       tooltip.innerHTML = `
                         <div class="curve-tooltip-date">${{selected.date}}</div>
                         <div><span>我</span><strong>${{metricText(selected.accountValue, state.metric)}}</strong></div>
                         <div><span>${{state.benchmarkLabel}}</span><strong>${{benchmark ? metricText(benchmark.value, state.metric) : '--'}}</strong></div>
+                        ${{excessRows}}
                         <div class="curve-tooltip-muted"><span>当日</span><strong>${{metricText(dailyValue, state.metric)}}</strong></div>
                         <div class="curve-tooltip-muted"><span>基准当日</span><strong>${{benchmark ? metricText(benchmarkDaily, state.metric) : '--'}}</strong></div>
                       `;
                       const cardRect = card.getBoundingClientRect();
                       const left = svgRect.left - cardRect.left + (selected.x / dims.width) * svgRect.width;
-                      const top = svgRect.top - cardRect.top + (Math.min(selected.y, benchmark?.y ?? selected.y) / dims.height) * svgRect.height;
+                      const topAnchor = Math.min(selected.y, benchmark?.y ?? selected.y, excess?.y ?? selected.y);
+                      const top = svgRect.top - cardRect.top + (topAnchor / dims.height) * svgRect.height;
                       const safeLeft = Math.max(88, Math.min(cardRect.width - 88, left));
                       tooltip.style.left = `${{safeLeft}}px`;
                       tooltip.style.top = `${{Math.max(12, top - 10)}}px`;
@@ -1166,6 +1253,7 @@ def render_curve_script(payload: list[dict[str, object]]) -> str:
                   function drawCard(card, series, range, latest, customStart, customEnd, metric, assists) {{
                     metric = metric === 'amount' ? 'amount' : 'return';
                     assists = assists || activeAssists();
+                    const showExcess = excessVisible();
                     let points = filteredPoints(series.points || [], range, latest, customStart, customEnd);
                     const activeBenchmark = selectedBenchmarkFor(series);
                     const rawBenchmarkPoints = activeBenchmark?.points || [];
@@ -1212,16 +1300,16 @@ def render_curve_script(payload: list[dict[str, object]]) -> str:
                     }}
                     function accountValuesFrom(visiblePoints, periodCapital, rangeMode) {{
                       const rangeBaseAmount = rangeMode === 'all' ? 0 : Number(visiblePoints[0]?.value || 0);
+                      let accountReturnGrowth = 1;
                       return visiblePoints.map((point, index) => {{
                         const previousPoint = index > 0 ? visiblePoints[index - 1] : null;
                         const delta = previousPoint ? Number(point.value || 0) - Number(previousPoint.value || 0) : 0;
                         const returnBase = returnBaseForPoint(point, previousPoint);
                         const dailyReturn = returnBase > 0 ? (delta / returnBase) * 100 : 0;
+                        if (index > 0 && Number.isFinite(dailyReturn)) accountReturnGrowth *= 1 + dailyReturn / 100;
+                        const cumulativeReturnValue = (accountReturnGrowth - 1) * 100;
                         const floatAmount = Number(point.value || 0);
                         const periodAmount = floatAmount - rangeBaseAmount;
-                        const pointCapital = capitalForPoint(point);
-                        const returnCapital = rangeMode === 'all' ? pointCapital : periodCapital;
-                        const floatReturn = returnCapital > 0 ? (periodAmount / returnCapital) * 100 : 0;
                         return {{
                           ...point,
                           dailyAmountValue: delta,
@@ -1231,14 +1319,15 @@ def render_curve_script(payload: list[dict[str, object]]) -> str:
                           rawAmountValue: floatAmount,
                           baseCapital: returnBase > 0 ? returnBase : baseCapital,
                           referenceCapital: periodCapital,
-                          returnValue: floatReturn,
-                          cumulativeReturnValue: floatReturn,
+                          returnValue: cumulativeReturnValue,
+                          cumulativeReturnValue,
                         }};
                       }});
                     }}
                     let accountValues = accountValuesFrom(points, referenceCapital, range);
                     const firstBenchmarkClose = benchmarkBaseClose(rawBenchmarkPoints, range, latest, customStart, customEnd, benchmarkPoints);
                     let benchmarkGrowth = 1;
+                    let benchmarkAmountTotal = 0;
                     const benchmarkValues = firstBenchmarkClose > 0
                       ? benchmarkPoints.map((point, index) => {{
                           const previousPoint = index > 0 ? benchmarkPoints[index - 1] : null;
@@ -1247,22 +1336,50 @@ def render_curve_script(payload: list[dict[str, object]]) -> str:
                           const dailyReturn = previousClose > 0 ? ((close / previousClose) - 1) * 100 : 0;
                           if (index > 0 && Number.isFinite(dailyReturn)) benchmarkGrowth *= 1 + dailyReturn / 100;
                           const cumulativeReturnValue = (benchmarkGrowth - 1) * 100;
-                          const cumulativeAmountValue = (cumulativeReturnValue / 100) * referenceCapital;
+                          const accountPoint = pointAtOrBeforeSerial(accountValues, Number(point.serial));
+                          const benchmarkCapital = capitalForPoint(accountPoint) || referenceCapital;
+                          const dailyAmountValue = index > 0 && benchmarkCapital > 0
+                            ? (dailyReturn / 100) * benchmarkCapital
+                            : 0;
+                          benchmarkAmountTotal += dailyAmountValue;
+                          const cumulativeAmountValue = benchmarkAmountTotal;
                           return {{
                           ...point,
                           dailyReturn,
                           returnValue: cumulativeReturnValue,
                           cumulativeReturnValue,
-                          dailyAmountValue: (dailyReturn / 100) * referenceCapital,
+                          dailyAmountValue,
                           amountValue: cumulativeAmountValue,
                           cumulativeAmountValue,
-                          baseCapital: referenceCapital,
+                          baseCapital: benchmarkCapital,
                         }};
                         }})
                       : [];
                     const accountMetricValues = accountValues.map((point) => ({{ ...point, metricValue: valueForMetric(point, metric) }}));
                     const benchmarkMetricValues = benchmarkValues.map((point) => ({{ ...point, metricValue: valueForMetric(point, metric) }}));
-                    const allSeriesPoints = accountMetricValues.concat(benchmarkMetricValues)
+                    const excessMetricValues = accountMetricValues.map((point) => {{
+                      const benchmarkPoint = pointAtOrBeforeSerial(benchmarkValues, Number(point.serial));
+                      const accountValue = Number(point.metricValue);
+                      const benchmarkValue = benchmarkPoint ? valueForMetric(benchmarkPoint, metric) : NaN;
+                      const accountDaily = metric === 'amount'
+                        ? Number(point.dailyAmountValue || 0)
+                        : Number(point.dailyReturn || 0);
+                      const benchmarkDaily = benchmarkPoint
+                        ? (metric === 'amount' ? Number(benchmarkPoint.dailyAmountValue || 0) : Number(benchmarkPoint.dailyReturn || 0))
+                        : NaN;
+                      return {{
+                        ...point,
+                        benchmarkValue,
+                        metricValue: Number.isFinite(accountValue) && Number.isFinite(benchmarkValue)
+                          ? accountValue - benchmarkValue
+                          : NaN,
+                        dailyExcessValue: Number.isFinite(accountDaily) && Number.isFinite(benchmarkDaily)
+                          ? accountDaily - benchmarkDaily
+                          : NaN,
+                      }};
+                    }}).filter((point) => Number.isFinite(Number(point.metricValue)));
+                    const visibleOverlayPoints = showExcess ? excessMetricValues : [];
+                    const allSeriesPoints = accountMetricValues.concat(benchmarkMetricValues, visibleOverlayPoints)
                       .filter((point) => Number.isFinite(Number(point.metricValue)));
                     let minSerial = Math.min(...allSeriesPoints.map((point) => Number(point.serial)));
                     let maxSerial = Math.max(...allSeriesPoints.map((point) => Number(point.serial)));
@@ -1278,8 +1395,10 @@ def render_curve_script(payload: list[dict[str, object]]) -> str:
                     const pointY = (value) => dims.top + ((maxValue - value) / (maxValue - minValue)) * dims.innerHeight;
                     const positions = accountMetricValues.map((point) => [pointX(Number(point.serial)), pointY(Number(point.metricValue)), Number(point.metricValue)]);
                     const benchmarkPositions = benchmarkMetricValues.map((point) => [pointX(Number(point.serial)), pointY(Number(point.metricValue)), Number(point.metricValue)]);
+                    const excessPositions = visibleOverlayPoints.map((point) => [pointX(Number(point.serial)), pointY(Number(point.metricValue)), Number(point.metricValue)]);
                     const linePath = linePathFromPositions(positions);
                     const benchmarkPath = linePathFromPositions(benchmarkPositions);
+                    const excessPath = linePathFromPositions(excessPositions);
                     const zeroY = pointY(0);
                     const first = points[0];
                     const last = points[points.length - 1];
@@ -1363,6 +1482,7 @@ def render_curve_script(payload: list[dict[str, object]]) -> str:
                     const line = card.querySelector('[data-curve-line]');
                     const glow = card.querySelector('[data-curve-line-glow]');
                     const benchmarkLine = card.querySelector('[data-curve-benchmark-line]');
+                    const excessLine = card.querySelector('[data-curve-excess-line]');
                     const drawdownBand = card.querySelector('[data-curve-drawdown-band]');
                     const drawdownLink = card.querySelector('[data-curve-drawdown-link]');
                     const drawdownLayer = card.querySelector('[data-curve-drawdown-layer]');
@@ -1382,6 +1502,10 @@ def render_curve_script(payload: list[dict[str, object]]) -> str:
                     if (line) line.setAttribute('d', linePath);
                     if (glow) glow.setAttribute('d', linePath);
                     if (benchmarkLine) benchmarkLine.setAttribute('d', benchmarkPath);
+                    if (excessLine) {{
+                      excessLine.setAttribute('d', excessPath);
+                      setSvgHidden(excessLine, !showExcess || !excessPositions.length);
+                    }}
                     if (area) area.setAttribute('d', areaPath);
                     if (drawdown && positions[drawdown.peakIndex] && positions[drawdown.troughIndex]) {{
                       const peakPos = positions[drawdown.peakIndex];
@@ -1411,7 +1535,7 @@ def render_curve_script(payload: list[dict[str, object]]) -> str:
                         drawdownTrough.setAttribute('r', '3.8');
                       }}
                       if (drawdownLabel) {{
-                        const labelText = metric === 'amount' ? signedMoneyText(drawdown.amount) : percentText(drawdown.rate);
+                        const labelText = metric === 'amount' ? displaySignedMoneyText(drawdown.amount) : percentText(drawdown.rate);
                         const labelX = Math.max(dims.left + 8, Math.min(dims.width - dims.right - 8, troughPos[0] - 6));
                         const labelY = Math.max(dims.top + 14, Math.min(dims.top + dims.innerHeight - 4, troughPos[1] - 8));
                         drawdownLabel.setAttribute('x', labelX.toFixed(2));
@@ -1424,9 +1548,9 @@ def render_curve_script(payload: list[dict[str, object]]) -> str:
                           ? `已修复 ${{daysText(drawdown.recoveredDays)}}`
                           : '尚未修复';
                         const primaryLabel = metric === 'amount' ? '利润最大回撤' : '收益率最大回撤';
-                        const primaryText = metric === 'amount' ? signedMoneyText(drawdown.amount) : percentText(drawdown.rate);
+                        const primaryText = metric === 'amount' ? displaySignedMoneyText(drawdown.amount) : percentText(drawdown.rate);
                         const secondaryLabel = metric === 'amount' ? '对应收益率回撤' : '对应利润回撤';
-                        const secondaryText = metric === 'amount' ? percentText(drawdown.rate) : signedMoneyText(drawdown.amount);
+                        const secondaryText = metric === 'amount' ? percentText(drawdown.rate) : displaySignedMoneyText(drawdown.amount);
                         drawdownCaption.innerHTML = `
                           <span><em>${{primaryLabel}}</em><strong>${{primaryText}}</strong></span>
                           <span><em>${{secondaryLabel}}</em><strong>${{secondaryText}}</strong></span>
@@ -1472,7 +1596,7 @@ def render_curve_script(payload: list[dict[str, object]]) -> str:
                         growthPeak.setAttribute('r', '3.8');
                       }}
                       if (growthLabel) {{
-                        const labelText = metric === 'amount' ? signedMoneyText(growth.amount) : percentText(growth.rate);
+                        const labelText = metric === 'amount' ? displaySignedMoneyText(growth.amount) : percentText(growth.rate);
                         const labelX = Math.max(dims.left + 8, Math.min(dims.width - dims.right - 8, peakPos[0] + 6));
                         const labelY = Math.max(dims.top + 14, Math.min(dims.top + dims.innerHeight - 4, peakPos[1] - 8));
                         growthLabel.setAttribute('x', labelX.toFixed(2));
@@ -1482,9 +1606,9 @@ def render_curve_script(payload: list[dict[str, object]]) -> str:
                       }}
                       if (growthCaption) {{
                         const primaryLabel = metric === 'amount' ? '利润最大增长' : '收益率最大增长';
-                        const primaryText = metric === 'amount' ? signedMoneyText(growth.amount) : percentText(growth.rate);
+                        const primaryText = metric === 'amount' ? displaySignedMoneyText(growth.amount) : percentText(growth.rate);
                         const secondaryLabel = metric === 'amount' ? '对应收益率增长' : '对应利润增长';
-                        const secondaryText = metric === 'amount' ? percentText(growth.rate) : signedMoneyText(growth.amount);
+                        const secondaryText = metric === 'amount' ? percentText(growth.rate) : displaySignedMoneyText(growth.amount);
                         growthCaption.innerHTML = `
                           <span><em>${{primaryLabel}}</em><strong>${{primaryText}}</strong></span>
                           <span><em>${{secondaryLabel}}</em><strong>${{secondaryText}}</strong></span>
@@ -1528,12 +1652,22 @@ def render_curve_script(payload: list[dict[str, object]]) -> str:
                         dot.setAttribute('r', '3.2');
                         dots.appendChild(dot);
                       }}
+                      if (showExcess && excessPositions.length) {{
+                        const excessLast = excessPositions[excessPositions.length - 1];
+                        const dot = document.createElementNS('http://www.w3.org/2000/svg', 'circle');
+                        dot.setAttribute('class', 'curve-excess-dot');
+                        dot.setAttribute('cx', excessLast[0].toFixed(2));
+                        dot.setAttribute('cy', excessLast[1].toFixed(2));
+                        dot.setAttribute('r', '3.1');
+                        dots.appendChild(dot);
+                      }}
                     }}
 
                     const hoverLayer = card.querySelector('[data-curve-hover-layer]');
                     const hoverLine = card.querySelector('[data-curve-hover-line]');
                     const hoverDotMe = card.querySelector('[data-curve-hover-dot-me]');
                     const hoverDotBase = card.querySelector('[data-curve-hover-dot-base]');
+                    const hoverDotExcess = card.querySelector('[data-curve-hover-dot-excess]');
                     const hoverPoints = accountMetricValues.map((point, index) => {{
                       const position = positions[index];
                       const benchmarkPoint = pointAtOrBeforeSerial(benchmarkMetricValues, Number(point.serial));
@@ -1547,6 +1681,18 @@ def render_curve_script(payload: list[dict[str, object]]) -> str:
                             dailyAmountValue: Number(benchmarkPoint.dailyAmountValue || 0),
                           }}
                         : null;
+                      const excessPoint = showExcess
+                        ? excessMetricValues.find((candidate) => Number(candidate.serial) === Number(point.serial))
+                        : null;
+                      const excess = excessPoint && Number.isFinite(Number(excessPoint.metricValue))
+                        ? {{
+                            value: Number(excessPoint.metricValue),
+                            x: pointX(Number(excessPoint.serial)),
+                            y: pointY(Number(excessPoint.metricValue)),
+                            dailyReturn: Number(excessPoint.dailyExcessValue || 0),
+                            dailyAmountValue: Number(excessPoint.dailyExcessValue || 0),
+                          }}
+                        : null;
                       return {{
                         date: point.date,
                         x: position[0],
@@ -1555,16 +1701,19 @@ def render_curve_script(payload: list[dict[str, object]]) -> str:
                         accountDailyReturn: Number(point.dailyReturn || 0),
                         accountDailyAmount: Number(point.dailyAmountValue || 0),
                         benchmark,
+                        excess,
                       }};
                     }}).filter((point) => Number.isFinite(point.x) && Number.isFinite(point.y));
                     card._curveHoverState = {{
                       metric,
+                      showExcess,
                       benchmarkLabel: activeBenchmark?.label || '市场基准',
                       points: hoverPoints,
                       hoverLayer,
                       hoverLine,
                       hoverDotMe,
                       hoverDotBase,
+                      hoverDotExcess,
                     }};
                     installHoverHandlers(card);
                     setSvgHidden(hoverLayer, true);
@@ -1586,7 +1735,7 @@ def render_curve_script(payload: list[dict[str, object]]) -> str:
                     if (endValue) {{
                       endValue.textContent = '';
                       endValue.setAttribute('x', String(Math.min(lastPos[0] + 10, 568)));
-                      endValue.setAttribute('y', String(Math.max(24, Math.min(280, lastPos[1] - 8))));
+                      endValue.setAttribute('y', String(Math.max(dims.top, Math.min(dims.top + dims.innerHeight - 2, lastPos[1] - 8))));
                     }}
                     card.dataset.curveMetric = metric;
                     card.dataset.accountReturn = Number.isFinite(periodReturn) ? String(periodReturn) : '';
@@ -1687,7 +1836,7 @@ def render_curve_script(payload: list[dict[str, object]]) -> str:
                     if (kicker) kicker.textContent = `${{primaryCard.dataset.periodLabel || '区间盈亏'}}${{dateRange}}`;
                     if (value) {{
                       setToneClass(value, periodPnl, 'ths-curve-value');
-                      value.textContent = signedMoneyText(periodPnl);
+                      value.textContent = displaySignedMoneyText(periodPnl);
                     }}
                     if (rate) {{
                       setToneClass(rate, periodReturn, '');
@@ -1732,6 +1881,19 @@ def render_curve_script(payload: list[dict[str, object]]) -> str:
                     }});
                   }});
                   root.addEventListener('click', (event) => {{
+                    const moneyToggle = event.target?.closest?.('[data-curve-money-toggle]');
+                    if (moneyToggle && root.contains(moneyToggle)) {{
+                      setMoneyHidden(!moneyHidden());
+                      return;
+                    }}
+                    const seriesToggle = event.target?.closest?.('[data-curve-toggle]');
+                    if (seriesToggle && root.contains(seriesToggle)) {{
+                      const nextActive = !seriesToggle.classList.contains('is-active');
+                      seriesToggle.classList.toggle('is-active', nextActive);
+                      seriesToggle.setAttribute('aria-pressed', nextActive ? 'true' : 'false');
+                      redraw();
+                      return;
+                    }}
                     const benchmarkButton = event.target?.closest?.('.ths-curve-benchmark');
                     if (benchmarkButton && root.contains(benchmarkButton)) {{
                       root.querySelectorAll('.ths-curve-benchmark').forEach((item) => {{
@@ -1762,6 +1924,7 @@ def render_curve_script(payload: list[dict[str, object]]) -> str:
                     input.addEventListener('change', redraw);
                   }});
                   window.addEventListener('trade-tracker-reporting-currency-change', redraw);
+                  restoreMoneyPrivacy();
                   updateBenchmarkTabs();
                   if (document.readyState === 'loading') {{
                     document.addEventListener('DOMContentLoaded', redraw, {{ once: true }});
