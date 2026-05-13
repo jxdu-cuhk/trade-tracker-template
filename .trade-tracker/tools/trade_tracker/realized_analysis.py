@@ -6,6 +6,7 @@ from dataclasses import dataclass
 from datetime import date
 
 from .market_data import display_currency_label
+from .options import option_strategy_capital
 from .settings import OPTION_EVENTS
 from .utils import (
     cell_raw,
@@ -119,10 +120,12 @@ def realized_trade_from_row(core, row_number: int, cells: dict[int, object]) -> 
         return None
 
     open_date = excel_serial_to_date(cell_raw(cells, 2))
-    event = raw_text_value(core, cells, 6)
     raw_type = raw_text_value(core, cells, 1)
     trade_type = raw_type or core_trade_type(raw_type) or "-"
     capital = parse_float(metrics.get("capital"))
+    event = raw_text_value(core, cells, 6)
+    if event in OPTION_EVENTS and (capital is None or abs(capital) < EPSILON):
+        capital = option_strategy_capital(core, cells, trade_type, event)
     days = parse_float(metrics.get("days"))
     return RealizedTrade(
         row_number=row_number,

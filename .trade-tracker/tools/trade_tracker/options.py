@@ -12,6 +12,7 @@ from .utils import cell_raw, clean_text, core_trade_type, excel_serial_to_date, 
 
 
 STOCK_EVENTS = {"现股", "Stock", "stock", "STOCK"}
+EPSILON = 0.000001
 
 
 def option_key(
@@ -68,6 +69,61 @@ def option_float_pnl(trade_type: str, open_price: float, current_price: float, q
     return (current_price - open_price) * gross_qty - fee
 
 
+def option_gross_premium(cells: dict[int, object]) -> float | None:
+    qty = raw_number(cells, 8)
+    open_price = raw_number(cells, 9)
+    multiplier = raw_number(cells, 19) or 1.0
+    if qty in (None, 0) or open_price is None:
+        return None
+    return abs(float(qty) * float(multiplier) * float(open_price))
+
+
+def cash_secured_put_capital(cells: dict[int, object]) -> float | None:
+    strike = raw_number(cells, 7)
+    qty = raw_number(cells, 8)
+    open_price = raw_number(cells, 9)
+    multiplier = raw_number(cells, 19) or 1.0
+    fee = abs(raw_number(cells, 11) or 0.0)
+    if strike is None or qty in (None, 0) or open_price is None:
+        return None
+    notional = abs(float(strike) * float(qty) * float(multiplier))
+    premium = abs(float(open_price) * float(qty) * float(multiplier))
+    return max(notional - premium + fee, 0.0)
+
+
+def explicit_option_capital(core, cells: dict[int, object], trade_type: str, event: str) -> float | None:
+    raw_capital = raw_number(cells, 12)
+    if raw_capital is not None and abs(raw_capital) > EPSILON:
+        return abs(float(raw_capital))
+    try:
+        row_capital = core.row_capital(cells, trade_type, event)
+    except Exception:
+        row_capital = None
+    if row_capital is not None and abs(float(row_capital or 0.0)) > EPSILON:
+        return abs(float(row_capital))
+    return None
+
+
+def option_strategy_capital(core, cells: dict[int, object], trade_type: str, event: str) -> float:
+    normalized_trade_type = core_trade_type(trade_type)
+    explicit = explicit_option_capital(core, cells, normalized_trade_type, event)
+    if explicit is not None:
+        return explicit
+
+    if normalized_trade_type == "sell" and option_kind_for_event(event) == "PUT":
+        capital = cash_secured_put_capital(cells)
+        if capital is not None and capital > EPSILON:
+            return capital
+
+    if normalized_trade_type == "buy":
+        premium = option_gross_premium(cells)
+        fee = abs(raw_number(cells, 11) or 0.0)
+        if premium is not None:
+            return premium + fee
+
+    return 0.0
+
+
 def option_tone_class(value: float | None) -> str:
     if value is None:
         return ""
@@ -95,10 +151,10 @@ def open_option_mark_for_row(core, cells: dict[int, object], quote_cache: dict[t
     qty = raw_number(cells, 8)
     open_price = raw_number(cells, 9)
     fee = raw_number(cells, 11) or 0.0
-    capital = raw_number(cells, 12)
     multiplier = raw_number(cells, 19) or 1.0
     if not ticker or not currency_label or strike is None or qty in (None, 0) or open_price is None:
         return None
+    capital = option_strategy_capital(core, cells, trade_type, event)
 
     quote_key = (ticker, currency_raw, event, expiry_text, number_key(strike))
     if quote_key not in quote_cache:
@@ -117,7 +173,7 @@ def open_option_mark_for_row(core, cells: dict[int, object], quote_cache: dict[t
         "current_price": f"{float(current_price):,.3f}".rstrip("0").rstrip(".") if isinstance(current_price, (int, float)) else "-",
         "float_pnl": f"{pnl:,.2f}" if pnl is not None else "-",
         "float_pnl_class": option_tone_class(pnl),
-        "capital": f"{capital:,.2f}" if capital is not None else "-",
+        "capital": f"{capital:,.2f}" if capital > EPSILON else "-",
         "option_code": clean_text(quote.get("option_code") if isinstance(quote, dict) else ""),
     }
     return option_key_from_cells(core, cells), mark
@@ -225,14 +281,7 @@ def option_income_for_row(core, cells: dict[int, object]) -> dict[str, object] |
     else:
         income = (gross_open - fee) if trade_type == "sell" else (-gross_open - fee)
 
-    capital = None
-    try:
-        capital = core.row_capital(cells, trade_type, event)
-    except Exception:
-        capital = None
-    if capital in (None, 0):
-        raw_capital = raw_number(cells, 12)
-        capital = (raw_capital or gross_open) + fee
+    capital = option_strategy_capital(core, cells, trade_type, event)
 
     open_date = excel_serial_to_date(cell_raw(cells, 2))
     days = max(((date.today() - open_date).days if open_date else 1), 1)
@@ -372,19 +421,7 @@ def adjust_holding_for_realized_income(row: dict[str, object], realized_income: 
 
 
 def option_reserved_capital(core, cells: dict[int, object], trade_type: str, event: str) -> float:
-    capital = raw_number(cells, 12)
-    if capital in (None, 0):
-        strike = raw_number(cells, 7)
-        qty = raw_number(cells, 8)
-        multiplier = raw_number(cells, 19) or 1.0
-        if strike is not None and qty not in (None, 0):
-            capital = abs(strike * qty * multiplier)
-    if capital in (None, 0):
-        try:
-            capital = core.row_capital(cells, trade_type, event)
-        except Exception:
-            capital = None
-    return abs(float(capital or 0.0))
+    return option_strategy_capital(core, cells, trade_type, event)
 
 
 def open_short_put_exposure_for_row(core, cells: dict[int, object]) -> dict[str, object] | None:
@@ -651,6 +688,6 @@ def patch_dashboard_data_with_options(core, rows, data: dict[str, object]) -> di
     add_open_short_put_capital_to_summaries(data, short_put_exposures)
 
     note = clean_text(data.get("totals_note") or "")
-    option_note = "已平仓/到期作废期权、已完成现股交易和分红净额归入对应标的；当前持仓成本按已实现净收益调低，卖出认沽按占用本金计入当前持仓市值和仓位，covered call 不重复计入。"
+    option_note = "已平仓/到期作废期权、已完成现股交易和分红净额归入对应标的；当前持仓成本按已实现净收益调低，卖出认沽按占用本金计入当前持仓市值和仓位，未录入本金时按 cash-secured 口径推导，covered call 不重复计入。"
     data["totals_note"] = option_note if not note else f"{note}；{option_note}"
     return data

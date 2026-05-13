@@ -38,7 +38,7 @@ from trade_tracker.html_tables import (
 )
 from trade_tracker.holdings_daily import apply_segmented_daily_pnl
 from trade_tracker.dividends import DIVIDEND_SHEET_NAME, load_dividend_events, load_workbook_dividend_events
-from trade_tracker.options import build_stock_realized_income_maps, open_option_mark_for_row, patch_dashboard_data_with_options
+from trade_tracker.options import build_stock_realized_income_maps, open_option_mark_for_row, option_strategy_capital, patch_dashboard_data_with_options
 from trade_tracker import state
 
 
@@ -587,6 +587,44 @@ class RealizedCostAdjustmentTests(unittest.TestCase):
         self.assertEqual(mark["capital"], "1,000.00")
         self.assertEqual(mark["open_date"], "2026/04/28")
 
+    def test_missing_short_put_capital_uses_cash_secured_basis(self):
+        open_put = row(
+            kind="卖出",
+            open_date=46140,
+            exp=46170,
+            ticker="PDD",
+            event="认沽",
+            strike=100,
+            qty=1,
+            open_price=5,
+            fee=1,
+            multiplier=100,
+            currency="美元",
+        )
+
+        capital = option_strategy_capital(FakeCore(), open_put, "卖出", "认沽")
+
+        self.assertAlmostEqual(capital, 9501.0)
+
+    def test_missing_short_call_capital_is_not_invented(self):
+        open_call = row(
+            kind="卖出",
+            open_date=46140,
+            exp=46170,
+            ticker="PDD",
+            event="认购",
+            strike=100,
+            qty=1,
+            open_price=5,
+            fee=1,
+            multiplier=100,
+            currency="美元",
+        )
+
+        capital = option_strategy_capital(FakeCore(), open_call, "卖出", "认购")
+
+        self.assertEqual(capital, 0.0)
+
     def test_open_cash_secured_put_exposure_merges_into_underlying_holding(self):
         open_put = row(
             kind="卖出",
@@ -1092,7 +1130,7 @@ class RealizedCostAdjustmentTests(unittest.TestCase):
         self.assertIn(">卖出</td>", normalized)
         self.assertIn(">3</td>", normalized)
         self.assertIn(">100</td>", normalized)
-        self.assertIn(">24,000.00</td>", normalized)
+        self.assertIn(">22,076.10</td>", normalized)
         self.assertIn(">美元</td>", normalized)
 
     def test_normalized_option_table_preserves_prefetched_marks(self):

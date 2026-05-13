@@ -35,7 +35,7 @@
 - `.trade-tracker/tools/trade_tracker/reporting_currency.py`: 看板统一口径币种切换。
 - `.trade-tracker/tools/trade_tracker/html_tables.py`: 表格列顺序、汇总行、上下横向滚动条、人民币折算汇总。
 - `.trade-tracker/tools/trade_tracker/overview.py`: 总体概览、分币种概览和交易费用汇总。
-- `.trade-tracker/tools/trade_tracker/options.py`: 期权和已完成现股收益口径，比如 covered call、short put 和成本回冲。
+- `.trade-tracker/tools/trade_tracker/options.py`: 期权和已完成现股收益口径，比如 covered call、short put、缺失保证金兜底和成本回冲。
 - `.trade-tracker/tools/trade_tracker/option_analysis.py`: 期权收益分析页面。
 - `.trade-tracker/tools/trade_tracker/realized_analysis.py`: 盈亏日历 / 阶段账单。
 - `.trade-tracker/tools/trade_tracker/clearance_analysis.py`: 清仓分析。

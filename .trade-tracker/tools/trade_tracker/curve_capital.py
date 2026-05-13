@@ -3,7 +3,9 @@ from __future__ import annotations
 from dataclasses import dataclass
 
 from .market_data import display_currency_label
-from .utils import cell_raw, clean_text, parse_float, raw_number, raw_text_value
+from .options import option_strategy_capital
+from .settings import OPTION_EVENTS
+from .utils import cell_raw, clean_text, core_trade_type, parse_float, raw_number, raw_text_value
 
 
 STOCK_EVENTS = {"现股", "Stock", "stock", "STOCK"}
@@ -15,6 +17,7 @@ class StockCapitalLot:
     open_serial: float
     close_serial: float | None
     capital: float
+    source: str = "stock"
 
 
 def stock_currency(core, cells: dict[int, object]) -> str:
@@ -26,7 +29,7 @@ def stock_currency(core, cells: dict[int, object]) -> str:
 
 def stock_lot_from_row(core, cells: dict[int, object]) -> StockCapitalLot | None:
     event = raw_text_value(core, cells, 6)
-    if event not in STOCK_EVENTS:
+    if event not in STOCK_EVENTS and event not in OPTION_EVENTS:
         return None
 
     currency = stock_currency(core, cells)
@@ -34,12 +37,19 @@ def stock_lot_from_row(core, cells: dict[int, object]) -> StockCapitalLot | None
     if not currency or open_serial is None:
         return None
 
-    qty = raw_number(cells, 8)
-    fill = raw_number(cells, 9)
     fee = abs(raw_number(cells, 11) or 0.0)
-    capital = raw_number(cells, 12)
-    if capital is None and qty is not None and fill is not None:
-        capital = abs(qty * fill)
+    if event in OPTION_EVENTS:
+        trade_type = core_trade_type(raw_text_value(core, cells, 1))
+        capital = option_strategy_capital(core, cells, trade_type, event)
+        fee = 0.0
+        source = "option"
+    else:
+        qty = raw_number(cells, 8)
+        fill = raw_number(cells, 9)
+        capital = raw_number(cells, 12)
+        if capital is None and qty is not None and fill is not None:
+            capital = abs(qty * fill)
+        source = "stock"
     if capital is None or abs(capital) <= 0.000001:
         return None
 
@@ -49,6 +59,7 @@ def stock_lot_from_row(core, cells: dict[int, object]) -> StockCapitalLot | None
         open_serial=open_serial,
         close_serial=close_serial,
         capital=abs(capital) + fee,
+        source=source,
     )
 
 
@@ -70,13 +81,15 @@ def attach_dynamic_curve_capital(core, rows: list[tuple[int, dict[int, object]]]
     for series in data.get("curve_series", []) or []:
         if not isinstance(series, dict):
             continue
-        if clean_text(series.get("source")) == "history":
-            continue
         currency = clean_text(series.get("currency"))
         lots = lots_by_currency.get(currency) or []
+        is_history_series = clean_text(series.get("source")) == "history"
+        if is_history_series:
+            lots = [lot for lot in lots if lot.source == "option"]
         if not lots:
             continue
         last_capital = 0.0
+        max_capital = parse_float(series.get("capital")) or 0.0
         for point in sorted(series.get("points", []) or [], key=lambda item: parse_float(item.get("serial")) or 0.0):
             if not isinstance(point, dict):
                 continue
@@ -84,9 +97,14 @@ def attach_dynamic_curve_capital(core, rows: list[tuple[int, dict[int, object]]]
             if serial is None:
                 continue
             capital = active_capital_for_serial(lots, serial)
+            base_capital = parse_float(point.get("capital")) or 0.0
             if capital > 0.000001:
                 last_capital = capital
-                point["capital"] = capital
+                point["capital"] = base_capital + capital if is_history_series else capital
+                max_capital = max(max_capital, parse_float(point.get("capital")) or 0.0)
             elif last_capital > 0.000001:
-                point["capital"] = last_capital
+                point["capital"] = base_capital + last_capital if is_history_series else last_capital
+                max_capital = max(max_capital, parse_float(point.get("capital")) or 0.0)
+        if max_capital > 0.000001:
+            series["capital"] = max_capital
     return data

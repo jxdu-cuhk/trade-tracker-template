@@ -15,6 +15,7 @@ from trade_tracker.dashboard_layout import (
     insert_dashboard_page_tabs,
     reorder_dashboard_sections,
 )
+from trade_tracker.html_tables import remove_stock_summary_section
 
 
 def section(title: str, body: str = "") -> str:
@@ -102,6 +103,15 @@ class DashboardLayoutTests(unittest.TestCase):
             updated = insert_dashboard_page_tabs(html)
 
         self.assertLess(updated.index("data-dashboard-page-tabs"), updated.index('id="refresh-panel"'))
+
+    def test_remove_stock_summary_section_uses_targeted_details(self):
+        html = "<main>" + section("当前持仓") + section("个股汇总", "<table></table>") + section("总收益曲线") + "</main>"
+
+        updated = remove_stock_summary_section(html)
+
+        self.assertIn("当前持仓", updated)
+        self.assertIn("总收益曲线", updated)
+        self.assertNotIn("个股汇总", updated)
 
     def test_apply_tonghuashun_curve_style_inserts_local_benchmark_shell(self):
         html = (

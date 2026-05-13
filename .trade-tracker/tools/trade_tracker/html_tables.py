@@ -6,9 +6,9 @@ import re
 from datetime import date
 
 from . import state
-from .market_data import current_fx_rates_to_cny, display_currency_label
+from .market_data import current_fx_rates_to_cny, display_currency_label, option_kind_for_event
 from .settings import ANNUAL_STOCK_SUMMARY_COLUMN_ORDER, HOLDINGS_COLUMN_ORDER, STOCK_SUMMARY_COLUMN_ORDER
-from .utils import cell_text, date_key, parse_float
+from .utils import cell_text, core_trade_type, date_key, parse_float
 from .options import option_key
 
 
@@ -694,8 +694,13 @@ def normalize_legacy_open_option_table(core, table_html: str) -> str:
             pnl_value = parse_float(mark_float_pnl)
         if mark_capital and mark_capital != "-":
             capital = parse_float(mark_capital)
-        if capital is None and strike is not None and qty is not None:
-            capital = abs(strike * qty * multiplier)
+        if capital is None and qty is not None and open_price is not None:
+            gross_premium = abs(open_price * qty * multiplier)
+            trade_side = core_trade_type(trade_type)
+            if trade_side == "buy":
+                capital = gross_premium
+            elif trade_side == "sell" and option_kind_for_event(event) == "PUT" and strike is not None:
+                capital = max(abs(strike * qty * multiplier) - gross_premium, 0.0)
         pnl_color = pnl_value
         if mark.get("float_pnl_class") == "value-positive":
             pnl_color = abs(pnl_value or 0)
@@ -1482,14 +1487,30 @@ def prioritize_annual_summary_filter(html_text: str) -> str:
 
 
 def remove_stock_summary_section(html_text: str) -> str:
-    return re.sub(
-        r'\n\s*<details\b(?=[^>]*class="[^"]*\bdashboard-section\b[^"]*")[^>]*>\s*'
-        r'(?:(?!</details>).)*?<h2 class="section-title">个股汇总</h2>'
-        r'(?:(?!</details>).)*?</details>\s*',
-        "\n",
-        html_text,
-        flags=re.S,
-    )
+    title = '<h2 class="section-title">个股汇总</h2>'
+    title_index = html_text.find(title)
+    if title_index < 0:
+        return html_text
+    details_start = html_text.rfind("<details", 0, title_index)
+    if details_start < 0:
+        return html_text
+    details_tag_end = html_text.find(">", details_start)
+    if details_tag_end < 0:
+        return html_text
+    details_tag = html_text[details_start : details_tag_end + 1]
+    if "dashboard-section" not in details_tag:
+        return html_text
+    details_end = html_text.find("</details>", title_index)
+    if details_end < 0:
+        return html_text
+    details_end += len("</details>")
+    while details_start > 0 and html_text[details_start - 1] in " \t":
+        details_start -= 1
+    if details_start > 0 and html_text[details_start - 1] == "\n":
+        details_start -= 1
+    while details_end < len(html_text) and html_text[details_end] in " \t\r\n":
+        details_end += 1
+    return html_text[:details_start] + "\n" + html_text[details_end:]
 
 
 def add_holdings_cny_settlement_footer_script(html_text: str) -> str:

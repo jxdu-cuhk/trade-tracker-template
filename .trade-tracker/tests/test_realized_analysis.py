@@ -29,9 +29,13 @@ def row(**values):
         "close_date": 4,
         "ticker": 5,
         "event": 6,
+        "strike": 7,
         "qty": 8,
+        "open_price": 9,
+        "fee": 11,
         "capital": 12,
         "pnl": 13,
+        "multiplier": 19,
         "currency": 20,
     }
     return {columns[key]: Cell(value) for key, value in values.items()}
@@ -166,6 +170,33 @@ class RealizedAnalysisTests(unittest.TestCase):
         self.assertAlmostEqual(summaries["2026-02-03"]["pnl"], 100)
         self.assertAlmostEqual(summaries["2026-02-03"]["by_currency"]["人民币"]["pnl"], 120)
         self.assertAlmostEqual(summaries["2026-02-03"]["by_currency"]["港币"]["pnl"], -20)
+
+    def test_short_put_without_capital_gets_cash_secured_return_basis(self):
+        trades = build_realized_trades(
+            FakeCore(),
+            [
+                (
+                    2,
+                    row(
+                        kind="卖出",
+                        open_date=date(2026, 5, 1),
+                        close_date=date(2026, 5, 8),
+                        ticker="PDD",
+                        event="认沽",
+                        strike=100,
+                        qty=1,
+                        open_price=5,
+                        fee=1,
+                        pnl=120,
+                        multiplier=100,
+                        currency="美元",
+                    ),
+                )
+            ],
+        )
+
+        self.assertAlmostEqual(trades[0].capital, 9501.0)
+        self.assertAlmostEqual(trades[0].return_rate, 120 / 9501.0)
 
     def test_render_realized_section_has_calendar_and_custom_stage_dates(self):
         section = render_realized_analysis_section(
