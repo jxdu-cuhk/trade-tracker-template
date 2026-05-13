@@ -1140,6 +1140,8 @@ class RealizedCostAdjustmentTests(unittest.TestCase):
         patched = add_balanced_summary_table_script(html)
 
         self.assertIn("function applySummaryTableTones", patched)
+        self.assertIn("function syncSummaryTopScrollbar", patched)
+        self.assertIn("summary-scrollbar-top", patched)
         self.assertIn("浮盈|盈亏|收益|分红|年化|回本空间", patched)
         self.assertNotIn("normalized === '回本空间'", patched)
 

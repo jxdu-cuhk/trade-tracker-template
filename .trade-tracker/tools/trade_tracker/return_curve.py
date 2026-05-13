@@ -16,6 +16,12 @@ from .utils import clean_text, parse_float
 
 COMBINED_CURRENCY = "人民币折算"
 COMBINED_CODE = "CNY"
+MARKET_SCOPES = [
+    {"id": "all", "label": "汇总", "currencies": set(), "default_benchmark": "sse"},
+    {"id": "cn", "label": "A股", "currencies": {"人民币", "CNY", "RMB"}, "default_benchmark": "sse"},
+    {"id": "hk", "label": "港股", "currencies": {"港币", "HKD"}, "default_benchmark": "hsi"},
+    {"id": "us", "label": "美股", "currencies": {"美元", "USD"}, "default_benchmark": "sp500"},
+]
 BENCHMARKS = [
     {"id": "sse", "market": "A股", "label": "上证指数", "short_label": "上证", "secid": "1.000001", "tencent": "sh000001"},
     {"id": "szse", "market": "A股", "label": "深证成指", "short_label": "深证", "secid": "0.399001", "tencent": "sz399001"},
@@ -397,7 +403,7 @@ def normalize_curve_points(points: list[dict[str, object]]) -> list[dict[str, ob
             "serial": serial,
             "value": value,
         }
-        for key in ("float_value", "realized_value", "total_value"):
+        for key in ("float_value", "realized_value", "total_value", "market_value", "net_flow"):
             extra_value = parse_float(point.get(key))
             if extra_value is not None:
                 by_day[iso][key] = extra_value
@@ -431,7 +437,7 @@ def converted_series(series_list: list[dict[str, object]]) -> list[dict[str, obj
                 "serial": point["serial"],
                 "value": value * rate,
             }
-            for key in ("float_value", "realized_value", "total_value"):
+            for key in ("float_value", "realized_value", "total_value", "market_value", "net_flow"):
                 extra_value = parse_float(point.get(key))
                 if extra_value is not None:
                     converted_point[key] = extra_value * rate
@@ -451,7 +457,15 @@ def converted_series(series_list: list[dict[str, object]]) -> list[dict[str, obj
     return converted
 
 
-def combine_series_to_cny(series_list: list[dict[str, object]]) -> dict[str, object] | None:
+def combine_series_to_cny(
+    series_list: list[dict[str, object]],
+    *,
+    currency: str = COMBINED_CURRENCY,
+    code: str = COMBINED_CODE,
+    scope_id: str = "all",
+    scope_label: str = "汇总",
+    default_benchmark: str = "sse",
+) -> dict[str, object] | None:
     series_items = converted_series(series_list)
     if not series_items:
         return None
@@ -474,13 +488,19 @@ def combine_series_to_cny(series_list: list[dict[str, object]]) -> dict[str, obj
         total_float = 0.0
         total_realized = 0.0
         total_total = 0.0
+        total_market = 0.0
+        total_net_flow = 0.0
         for series, point in zip(series_items, last_points):
             if not point:
                 continue
+            is_current_day = str(point.get("iso")) == iso
             total_value += parse_float(point.get("value")) or 0.0
             total_float += parse_float(point.get("float_value")) or parse_float(point.get("value")) or 0.0
             total_realized += parse_float(point.get("realized_value")) or 0.0
             total_total += parse_float(point.get("total_value")) or parse_float(point.get("value")) or 0.0
+            total_market += parse_float(point.get("market_value")) or 0.0
+            if is_current_day:
+                total_net_flow += parse_float(point.get("net_flow")) or 0.0
             point_capital = parse_float(point.get("capital"))
             total_capital += point_capital if point_capital is not None else parse_float(series.get("capital")) or 0.0
         base = by_iso[iso]
@@ -492,6 +512,8 @@ def combine_series_to_cny(series_list: list[dict[str, object]]) -> dict[str, obj
             "float_value": total_float,
             "realized_value": total_realized,
             "total_value": total_total,
+            "market_value": total_market,
+            "net_flow": total_net_flow,
         }
         if total_capital > 0.000001:
             combined_point["capital"] = total_capital
@@ -501,11 +523,48 @@ def combine_series_to_cny(series_list: list[dict[str, object]]) -> dict[str, obj
     if capital is None:
         capital = sum(parse_float(series.get("capital")) or 0.0 for series in series_items)
     return {
-        "currency": COMBINED_CURRENCY,
-        "code": COMBINED_CODE,
+        "currency": currency,
+        "code": code,
+        "scope": scope_id,
+        "scopeLabel": scope_label,
+        "defaultBenchmark": default_benchmark,
         "capital": capital,
         "points": combined_points,
     }
+
+
+def scope_for_series(series: dict[str, object]) -> str:
+    currency = clean_text(series.get("currency")).upper()
+    if currency in {"人民币", "CNY", "RMB"}:
+        return "cn"
+    if currency in {"港币", "HKD"}:
+        return "hk"
+    if currency in {"美元", "USD"}:
+        return "us"
+    return ""
+
+
+def series_for_scope(series_list: list[dict[str, object]], scope: dict[str, object]) -> list[dict[str, object]]:
+    scope_id = clean_text(scope.get("id"))
+    if scope_id == "all":
+        return series_list
+    return [series for series in series_list if scope_for_series(series) == scope_id]
+
+
+def attach_benchmarks(series: dict[str, object], benchmarks: list[dict[str, object]]) -> dict[str, object]:
+    series["benchmarks"] = benchmarks
+    default_id = clean_text(series.get("defaultBenchmark")) or clean_text(COMBINED_BENCHMARK["id"])
+    series["benchmark"] = next((benchmark for benchmark in benchmarks if clean_text(benchmark.get("id")) == default_id), None) or (
+        benchmarks[0]
+        if benchmarks
+        else {
+            "id": COMBINED_BENCHMARK["id"],
+            "market": COMBINED_BENCHMARK["market"],
+            "label": COMBINED_BENCHMARK["label"],
+            "points": [],
+        }
+    )
+    return series
 
 
 def curve_payload(series_list: list[dict[str, object]]) -> list[dict[str, object]]:
@@ -516,14 +575,26 @@ def curve_payload(series_list: list[dict[str, object]]) -> list[dict[str, object
     start_iso = str(points[0]["iso"]) if points else ""
     end_iso = str(points[-1]["iso"]) if points else ""
     benchmarks = fetch_benchmark_payloads(start_iso, end_iso)
-    combined["benchmarks"] = benchmarks
-    combined["benchmark"] = benchmarks[0] if benchmarks else {
-        "id": COMBINED_BENCHMARK["id"],
-        "market": COMBINED_BENCHMARK["market"],
-        "label": COMBINED_BENCHMARK["label"],
-        "points": [],
-    }
-    return [combined]
+    payload = []
+    for scope in MARKET_SCOPES:
+        scope_id = clean_text(scope.get("id"))
+        scoped_series = series_for_scope(series_list, scope)
+        if not scoped_series:
+            continue
+        scope_label = clean_text(scope.get("label")) or "汇总"
+        currency_label = COMBINED_CURRENCY if scope_id == "all" else f"{scope_label}折算"
+        code = COMBINED_CODE if scope_id == "all" else (scope_id.upper() or COMBINED_CODE)
+        combined_scope = combine_series_to_cny(
+            scoped_series,
+            currency=currency_label,
+            code=code,
+            scope_id=scope_id,
+            scope_label=scope_label,
+            default_benchmark=clean_text(scope.get("default_benchmark")) or "sse",
+        )
+        if combined_scope and list(combined_scope.get("points") or []):
+            payload.append(attach_benchmarks(combined_scope, benchmarks))
+    return payload
 
 
 def safe_json(data: object) -> str:
@@ -537,8 +608,9 @@ def safe_json(data: object) -> str:
 
 def render_curve_card(index: int, series: dict[str, object]) -> str:
     currency = clean_text(series.get("currency")) or "-"
+    scope = clean_text(series.get("scope")) or "all"
     return f"""
-                <div class="curve-card" data-return-curve-card data-series-index="{index}">
+                <div class="curve-card" data-return-curve-card data-series-index="{index}" data-curve-scope="{html.escape(scope)}">
                   <div class="curve-card-head">
                     <div>
                       <h3 class="curve-title">{html.escape(currency)} 收益分析曲线</h3>
@@ -560,6 +632,7 @@ def render_curve_card(index: int, series: dict[str, object]) -> str:
                     <line class="curve-zero-line" x1="34" y1="236" x2="564" y2="236" data-curve-zero-line></line>
                     <rect class="curve-drawdown-band" data-curve-drawdown-band></rect>
                     <rect class="curve-growth-band" data-curve-growth-band></rect>
+                    <g class="curve-candles" data-curve-candles></g>
                     <path class="curve-benchmark-line" data-curve-benchmark-line></path>
                     <path class="curve-excess-line" data-curve-excess-line></path>
                     <path class="curve-area" data-curve-area></path>
@@ -743,6 +816,22 @@ def render_curve_script(payload: list[dict[str, object]]) -> str:
                     return 'curve-badge';
                   }}
 
+                  function valueToneClass(value) {{
+                    if (!Number.isFinite(value)) return 'value-zero';
+                    if (value > 0) return 'value-positive';
+                    if (value < 0) return 'value-negative';
+                    return 'value-zero';
+                  }}
+
+                  function svgNumberClass(baseClass, value) {{
+                    const tone = !Number.isFinite(value) ? 'zero' : value > 0 ? 'positive' : value < 0 ? 'negative' : 'zero';
+                    return `${{baseClass}} curve-number-${{tone}}`;
+                  }}
+
+                  function toneStrong(value, text) {{
+                    return `<strong class="${{valueToneClass(value)}}">${{text}}</strong>`;
+                  }}
+
                   function parseDate(iso) {{
                     const parts = String(iso || '').split('-').map(Number);
                     if (parts.length !== 3 || parts.some((part) => !Number.isFinite(part))) return null;
@@ -812,11 +901,37 @@ def render_curve_script(payload: list[dict[str, object]]) -> str:
                     return latest;
                   }}
 
+                  function latestIsoForSeries(series) {{
+                    let latest = '';
+                    (series?.points || []).forEach((point) => {{
+                      if (point.iso && point.iso > latest) latest = point.iso;
+                    }});
+                    return latest;
+                  }}
+
                   function benchmarksForSeries(series) {{
                     const items = Array.isArray(series?.benchmarks) && series.benchmarks.length
                       ? series.benchmarks
                       : (series?.benchmark ? [series.benchmark] : []);
                     return items.filter((benchmark) => benchmark && (benchmark.id || benchmark.label));
+                  }}
+
+                  function activeScopeId() {{
+                    const active = root.querySelector('.ths-curve-scope.is-active');
+                    return active?.dataset.curveScope || root.dataset.curveScope || 'all';
+                  }}
+
+                  function selectedSeries() {{
+                    const scope = activeScopeId();
+                    return seriesList.find((series) => String(series.scope || 'all') === scope)
+                      || seriesList[0]
+                      || null;
+                  }}
+
+                  function activeCurveCard() {{
+                    const scope = activeScopeId();
+                    return root.querySelector(`[data-return-curve-card][data-curve-scope="${{scope}}"]`)
+                      || root.querySelector('[data-return-curve-card]');
                   }}
 
                   function activeBenchmarkId() {{
@@ -827,21 +942,51 @@ def render_curve_script(payload: list[dict[str, object]]) -> str:
                   function selectedBenchmarkFor(series) {{
                     const benchmarks = benchmarksForSeries(series);
                     if (!benchmarks.length) return null;
-                    const selectedId = activeBenchmarkId();
+                    const selectedId = activeBenchmarkId() || String(series?.defaultBenchmark || '');
                     return benchmarks.find((benchmark) => String(benchmark.id || benchmark.label) === selectedId)
                       || benchmarks.find((benchmark) => (benchmark.points || []).length)
                       || benchmarks[0];
                   }}
 
+                  function defaultBenchmarkForSeries(series) {{
+                    return String(series?.defaultBenchmark || series?.benchmark?.id || 'sse');
+                  }}
+
+                  function updateScopeTabs() {{
+                    const tabs = root.querySelector('[data-curve-scope-tabs]');
+                    if (!tabs) return;
+                    const scopes = seriesList.filter((series) => series && (series.points || []).length);
+                    const previousId = activeScopeId();
+                    const selectedId = scopes.some((series) => String(series.scope || 'all') === previousId)
+                      ? previousId
+                      : String(scopes[0]?.scope || 'all');
+                    root.dataset.curveScope = selectedId;
+                    tabs.innerHTML = '';
+                    scopes.forEach((series) => {{
+                      const scopeId = String(series.scope || 'all');
+                      const label = String(series.scopeLabel || series.currency || scopeId);
+                      const button = document.createElement('button');
+                      button.type = 'button';
+                      button.className = `ths-curve-scope${{scopeId === selectedId ? ' is-active' : ''}}`;
+                      button.dataset.curveScope = scopeId;
+                      button.textContent = label;
+                      button.setAttribute('aria-pressed', scopeId === selectedId ? 'true' : 'false');
+                      tabs.appendChild(button);
+                    }});
+                    tabs.hidden = scopes.length <= 1;
+                  }}
+
                   function updateBenchmarkTabs() {{
                     const tabs = root.querySelector('[data-curve-benchmark-tabs]');
                     if (!tabs) return;
-                    const benchmarks = benchmarksForSeries(seriesList[0] || {{}});
+                    const series = selectedSeries() || seriesList[0] || {{}};
+                    const benchmarks = benchmarksForSeries(series);
                     const previousId = activeBenchmarkId();
+                    const defaultId = defaultBenchmarkForSeries(series);
                     const firstId = benchmarks.length ? String(benchmarks[0].id || benchmarks[0].label || '') : '';
                     const selectedId = benchmarks.some((benchmark) => String(benchmark.id || benchmark.label) === previousId)
                       ? previousId
-                      : firstId;
+                      : (benchmarks.some((benchmark) => String(benchmark.id || benchmark.label) === defaultId) ? defaultId : firstId);
                     root.dataset.curveBenchmark = selectedId;
                     tabs.innerHTML = '';
                     benchmarks.forEach((benchmark) => {{
@@ -938,6 +1083,40 @@ def render_curve_script(payload: list[dict[str, object]]) -> str:
                     return positions.map((point, index) => `${{index ? 'L' : 'M'}} ${{point[0].toFixed(2)}} ${{point[1].toFixed(2)}}`).join(' ');
                   }}
 
+                  function drawCandles(layer, candles, pointX, pointY) {{
+                    if (!layer) return;
+                    layer.innerHTML = '';
+                    if (!candles.length) return;
+                    const candleWidth = Math.max(1.2, Math.min(12, dims.innerWidth / Math.max(candles.length, 1) * 0.58));
+                    candles.forEach((candle) => {{
+                      const x = pointX(Number(candle.serial));
+                      const openY = pointY(Number(candle.open));
+                      const closeY = pointY(Number(candle.close));
+                      const highY = pointY(Number(candle.high));
+                      const lowY = pointY(Number(candle.low));
+                      if (![x, openY, closeY, highY, lowY].every(Number.isFinite)) return;
+                      const tone = candle.close > candle.open ? 'up' : candle.close < candle.open ? 'down' : 'flat';
+                      const wick = document.createElementNS('http://www.w3.org/2000/svg', 'line');
+                      wick.setAttribute('class', `curve-candle-wick curve-candle-${{tone}}`);
+                      wick.setAttribute('x1', x.toFixed(2));
+                      wick.setAttribute('x2', x.toFixed(2));
+                      wick.setAttribute('y1', highY.toFixed(2));
+                      wick.setAttribute('y2', lowY.toFixed(2));
+                      layer.appendChild(wick);
+                      const body = document.createElementNS('http://www.w3.org/2000/svg', 'rect');
+                      const rawHeight = Math.abs(closeY - openY);
+                      const height = Math.max(1.4, rawHeight);
+                      const y = Math.min(openY, closeY) - Math.max(0, (height - rawHeight) / 2);
+                      body.setAttribute('class', `curve-candle-body curve-candle-${{tone}}`);
+                      body.setAttribute('x', (x - candleWidth / 2).toFixed(2));
+                      body.setAttribute('y', y.toFixed(2));
+                      body.setAttribute('width', candleWidth.toFixed(2));
+                      body.setAttribute('height', height.toFixed(2));
+                      body.setAttribute('rx', '0');
+                      layer.appendChild(body);
+                    }});
+                  }}
+
                   function valueForMetric(point, metric) {{
                     return Number(metric === 'amount' ? point?.amountValue : point?.returnValue);
                   }}
@@ -1023,6 +1202,15 @@ def render_curve_script(payload: list[dict[str, object]]) -> str:
                     return selected;
                   }}
 
+                  function pointBeforeSerial(points, serial) {{
+                    let selected = null;
+                    for (const point of points || []) {{
+                      if (Number(point.serial) < serial) selected = point;
+                      if (Number(point.serial) >= serial) break;
+                    }}
+                    return selected;
+                  }}
+
                   function setSvgHidden(node, hidden) {{
                     if (!node) return;
                     node.style.display = hidden ? 'none' : '';
@@ -1047,6 +1235,215 @@ def render_curve_script(payload: list[dict[str, object]]) -> str:
                   function excessVisible() {{
                     const toggle = root.querySelector('[data-curve-toggle="excess"]');
                     return !toggle || toggle.classList.contains('is-active');
+                  }}
+
+                  function activeChartMode() {{
+                    const active = root.querySelector('.ths-curve-chart-mode.is-active');
+                    return active?.dataset.curveChartMode === 'candlestick' ? 'candlestick' : 'line';
+                  }}
+
+                  function activeCandleInterval() {{
+                    const active = root.querySelector('.ths-curve-candle-interval.is-active');
+                    const interval = active?.dataset.curveCandleInterval || root.dataset.curveCandleInterval || '';
+                    return ['week', 'month', 'year'].includes(interval) ? interval : '';
+                  }}
+
+                  function activeCandleButton() {{
+                    return root.querySelector('.ths-curve-candle-interval.is-active');
+                  }}
+
+                  function setCandleInterval(interval, touched) {{
+                    const normalized = ['week', 'month', 'year'].includes(interval) ? interval : 'week';
+                    root.dataset.curveCandleInterval = normalized;
+                    if (touched) root.dataset.curveCandleIntervalTouched = '1';
+                    root.querySelectorAll('.ths-curve-candle-interval').forEach((item) => {{
+                      const active = item.dataset.curveCandleInterval === normalized;
+                      item.classList.toggle('is-active', active);
+                      item.setAttribute('aria-pressed', active ? 'true' : 'false');
+                    }});
+                  }}
+
+                  function weekStartIso(iso) {{
+                    const parsed = parseDate(iso);
+                    if (!parsed) return '';
+                    const day = parsed.getUTCDay();
+                    const offset = (day + 6) % 7;
+                    parsed.setUTCDate(parsed.getUTCDate() - offset);
+                    return isoFromDate(parsed);
+                  }}
+
+                  function candleBucketFor(iso, interval) {{
+                    const parsed = parseDate(iso);
+                    if (!parsed) return {{ key: '', label: '' }};
+                    const year = parsed.getUTCFullYear();
+                    const month = String(parsed.getUTCMonth() + 1).padStart(2, '0');
+                    if (interval === 'year') return {{ key: String(year), label: `${{year}}` }};
+                    if (interval === 'month') return {{ key: `${{year}}-${{month}}`, label: `${{year}}/${{month}}` }};
+                    if (interval === 'week') {{
+                      const start = weekStartIso(iso);
+                      return {{ key: start, label: `${{dateLabelFromIso(start)}}周` }};
+                    }}
+                    return {{ key: iso, label: dateLabelFromIso(iso) }};
+                  }}
+
+                  function candleIntervalFor(range, visiblePoints) {{
+                    if (range === 'all') return 'year';
+                    if (range === 'three-year' || range === 'year') return 'month';
+                    if (range === 'three-month') return 'week';
+                    if (range === 'custom') {{
+                      const first = visiblePoints?.[0];
+                      const last = visiblePoints?.[visiblePoints.length - 1];
+                      const span = Number(last?.serial) - Number(first?.serial);
+                      if (span > 900) return 'year';
+                      if (span > 120) return 'month';
+                      if (span > 38) return 'week';
+                    }}
+                    return 'week';
+                  }}
+
+                  function effectiveCandleInterval(range, visiblePoints) {{
+                    return activeCandleInterval() || candleIntervalFor(range, visiblePoints);
+                  }}
+
+                  function candleIntervalLabel(interval) {{
+                    if (interval === 'year') return '年K';
+                    if (interval === 'month') return '月K';
+                    return '周K';
+                  }}
+
+                  function aggregateCandles(points, interval) {{
+                    const candles = [];
+                    let current = null;
+                    (points || []).forEach((point) => {{
+                      const value = Number(point?.metricValue);
+                      const serial = Number(point?.serial);
+                      if (!Number.isFinite(value) || !Number.isFinite(serial) || !point?.iso) return;
+                      const bucket = candleBucketFor(point.iso, interval);
+                      if (!bucket.key) return;
+                      if (!current || current.key !== bucket.key) {{
+                        current = {{
+                          key: bucket.key,
+                          label: bucket.label,
+                          open: value,
+                          high: value,
+                          low: value,
+                          close: value,
+                          startSerial: serial,
+                          endSerial: serial,
+                          serial,
+                          startIso: point.iso,
+                          endIso: point.iso,
+                          count: 1,
+                        }};
+                        candles.push(current);
+                        return;
+                      }}
+                      current.high = Math.max(current.high, value);
+                      current.low = Math.min(current.low, value);
+                      current.close = value;
+                      current.endSerial = serial;
+                      current.serial = (current.startSerial + current.endSerial) / 2;
+                      current.endIso = point.iso;
+                      current.count += 1;
+                    }});
+                    return candles;
+                  }}
+
+                  function resetKlineViewport() {{
+                    delete root.dataset.curveKlineStartSerial;
+                    delete root.dataset.curveKlineEndSerial;
+                  }}
+
+                  function serialDomainFor(points) {{
+                    const serials = (points || [])
+                      .map((point) => Number(point?.serial))
+                      .filter(Number.isFinite);
+                    if (!serials.length) return null;
+                    return {{
+                      min: Math.min(...serials),
+                      max: Math.max(...serials),
+                    }};
+                  }}
+
+                  function minimumKlineSpan(domain) {{
+                    const span = Number(domain?.max) - Number(domain?.min);
+                    if (!Number.isFinite(span) || span <= 0) return 1;
+                    return Math.min(span, Math.max(5, span / 420));
+                  }}
+
+                  function clampKlineViewport(start, end, domain) {{
+                    if (!domain) return null;
+                    const domainMin = Number(domain.min);
+                    const domainMax = Number(domain.max);
+                    if (!Number.isFinite(domainMin) || !Number.isFinite(domainMax)) return null;
+                    if (domainMax <= domainMin) {{
+                      return {{ start: domainMin, end: domainMax, domainMin, domainMax }};
+                    }}
+                    let nextStart = Number.isFinite(start) ? Number(start) : domainMin;
+                    let nextEnd = Number.isFinite(end) ? Number(end) : domainMax;
+                    if (nextEnd < nextStart) [nextStart, nextEnd] = [nextEnd, nextStart];
+                    const fullSpan = domainMax - domainMin;
+                    const minSpan = minimumKlineSpan(domain);
+                    let span = Math.max(minSpan, Math.min(fullSpan, nextEnd - nextStart));
+                    let center = Number.isFinite((nextStart + nextEnd) / 2) ? (nextStart + nextEnd) / 2 : (domainMin + domainMax) / 2;
+                    nextStart = center - span / 2;
+                    nextEnd = center + span / 2;
+                    if (nextStart < domainMin) {{
+                      nextStart = domainMin;
+                      nextEnd = domainMin + span;
+                    }}
+                    if (nextEnd > domainMax) {{
+                      nextEnd = domainMax;
+                      nextStart = domainMax - span;
+                    }}
+                    return {{ start: nextStart, end: nextEnd, domainMin, domainMax }};
+                  }}
+
+                  function klineViewportFor(points) {{
+                    const domain = serialDomainFor(points);
+                    if (!domain) return null;
+                    const start = Number(root.dataset.curveKlineStartSerial);
+                    const end = Number(root.dataset.curveKlineEndSerial);
+                    return clampKlineViewport(start, end, domain);
+                  }}
+
+                  function writeKlineViewport(viewport) {{
+                    if (!viewport) return;
+                    root.dataset.curveKlineStartSerial = String(viewport.start);
+                    root.dataset.curveKlineEndSerial = String(viewport.end);
+                  }}
+
+                  function pointsInKlineViewport(points, viewport) {{
+                    if (!viewport) return points || [];
+                    const selected = (points || []).filter((point) => {{
+                      const serial = Number(point?.serial);
+                      return Number.isFinite(serial) && serial >= viewport.start && serial <= viewport.end;
+                    }});
+                    if (selected.length) return selected;
+                    const fallback = pointAtOrBeforeSerial(points || [], viewport.end) || (points || [])[0];
+                    return fallback ? [fallback] : [];
+                  }}
+
+                  function activeKlineViewportFromCard(card) {{
+                    const domain = {{
+                      min: Number(card?.dataset.curveKlineDomainMin),
+                      max: Number(card?.dataset.curveKlineDomainMax),
+                    }};
+                    if (!Number.isFinite(domain.min) || !Number.isFinite(domain.max)) return null;
+                    return clampKlineViewport(
+                      Number(card.dataset.curveKlineViewportStart),
+                      Number(card.dataset.curveKlineViewportEnd),
+                      domain
+                    );
+                  }}
+
+                  function serialFromClientX(card, clientX, viewport) {{
+                    const svg = card?.querySelector('.curve-svg');
+                    if (!svg || !viewport) return NaN;
+                    const rect = svg.getBoundingClientRect();
+                    const viewX = ((clientX - rect.left) / Math.max(rect.width, 1)) * dims.width;
+                    const ratio = Math.max(0, Math.min(1, (viewX - dims.left) / Math.max(dims.innerWidth, 1)));
+                    return viewport.start + ratio * (viewport.end - viewport.start);
                   }}
 
                   function drawdownNav(point) {{
@@ -1169,6 +1566,7 @@ def render_curve_script(payload: list[dict[str, object]]) -> str:
                       setSvgHidden(state.hoverLayer, true);
                     }};
                     const move = (event) => {{
+                      if (card.classList.contains('is-kline-dragging')) return hide();
                       const state = card._curveHoverState;
                       if (!state || !state.points || !state.points.length) return hide();
                       const svgRect = svg.getBoundingClientRect();
@@ -1213,6 +1611,31 @@ def render_curve_script(payload: list[dict[str, object]]) -> str:
                         setSvgHidden(state.hoverDotExcess, !excess);
                       }}
                       setSvgHidden(state.hoverLayer, false);
+                      if (state.chartMode === 'candlestick' && selected.candle) {{
+                        setSvgHidden(state.hoverDotBase, true);
+                        setSvgHidden(state.hoverDotExcess, true);
+                        const candle = selected.candle;
+                        const change = Number(candle.close) - Number(candle.open);
+                        const amplitude = Number(candle.high) - Number(candle.low);
+                        tooltip.innerHTML = `
+                          <div class="curve-tooltip-date">${{state.candleIntervalLabel}} ${{selected.date}}</div>
+                          <div><span>开盘</span>${{toneStrong(candle.open, metricText(candle.open, state.metric))}}</div>
+                          <div><span>最高</span>${{toneStrong(candle.high, metricText(candle.high, state.metric))}}</div>
+                          <div><span>最低</span>${{toneStrong(candle.low, metricText(candle.low, state.metric))}}</div>
+                          <div><span>收盘</span>${{toneStrong(candle.close, metricText(candle.close, state.metric))}}</div>
+                          <div class="curve-tooltip-muted"><span>区间变化</span>${{toneStrong(change, metricText(change, state.metric))}}</div>
+                          <div class="curve-tooltip-muted"><span>振幅</span>${{toneStrong(amplitude, metricText(amplitude, state.metric))}}</div>
+                        `;
+                        const cardRect = card.getBoundingClientRect();
+                        const left = svgRect.left - cardRect.left + (selected.x / dims.width) * svgRect.width;
+                        const topAnchor = selected.highY ?? selected.y;
+                        const top = svgRect.top - cardRect.top + (topAnchor / dims.height) * svgRect.height;
+                        const safeLeft = Math.max(88, Math.min(cardRect.width - 88, left));
+                        tooltip.style.left = `${{safeLeft}}px`;
+                        tooltip.style.top = `${{Math.max(12, top - 10)}}px`;
+                        tooltip.hidden = false;
+                        return;
+                      }}
                       const dailyValue = state.metric === 'amount'
                         ? selected.accountDailyAmount
                         : selected.accountDailyReturn;
@@ -1223,16 +1646,16 @@ def render_curve_script(payload: list[dict[str, object]]) -> str:
                         ? (state.metric === 'amount' ? excess.dailyAmountValue : excess.dailyReturn)
                         : NaN;
                       const excessRows = excess ? `
-                        <div><span>超额</span><strong>${{metricText(excess.value, state.metric)}}</strong></div>
-                        <div class="curve-tooltip-muted"><span>超额当日</span><strong>${{metricText(excessDaily, state.metric)}}</strong></div>
+                        <div><span>超额</span>${{toneStrong(excess.value, metricText(excess.value, state.metric))}}</div>
+                        <div class="curve-tooltip-muted"><span>超额当日</span>${{toneStrong(excessDaily, metricText(excessDaily, state.metric))}}</div>
                       ` : '';
                       tooltip.innerHTML = `
                         <div class="curve-tooltip-date">${{selected.date}}</div>
-                        <div><span>我</span><strong>${{metricText(selected.accountValue, state.metric)}}</strong></div>
-                        <div><span>${{state.benchmarkLabel}}</span><strong>${{benchmark ? metricText(benchmark.value, state.metric) : '--'}}</strong></div>
+                        <div><span>我</span>${{toneStrong(selected.accountValue, metricText(selected.accountValue, state.metric))}}</div>
+                        <div><span>${{state.benchmarkLabel}}</span>${{benchmark ? toneStrong(benchmark.value, metricText(benchmark.value, state.metric)) : '<strong>--</strong>'}}</div>
                         ${{excessRows}}
-                        <div class="curve-tooltip-muted"><span>当日</span><strong>${{metricText(dailyValue, state.metric)}}</strong></div>
-                        <div class="curve-tooltip-muted"><span>基准当日</span><strong>${{benchmark ? metricText(benchmarkDaily, state.metric) : '--'}}</strong></div>
+                        <div class="curve-tooltip-muted"><span>当日</span>${{toneStrong(dailyValue, metricText(dailyValue, state.metric))}}</div>
+                        <div class="curve-tooltip-muted"><span>基准当日</span>${{benchmark ? toneStrong(benchmarkDaily, metricText(benchmarkDaily, state.metric)) : '<strong>--</strong>'}}</div>
                       `;
                       const cardRect = card.getBoundingClientRect();
                       const left = svgRect.left - cardRect.left + (selected.x / dims.width) * svgRect.width;
@@ -1250,18 +1673,121 @@ def render_curve_script(payload: list[dict[str, object]]) -> str:
                     hide();
                   }}
 
+                  let klineRedrawPending = false;
+                  function requestKlineRedraw() {{
+                    if (klineRedrawPending) return;
+                    klineRedrawPending = true;
+                    requestAnimationFrame(() => {{
+                      klineRedrawPending = false;
+                      redraw();
+                    }});
+                  }}
+
+                  function installKlineNavigationHandlers(card) {{
+                    if (card.dataset.curveKlineNavBound === '1') return;
+                    const svg = card.querySelector('.curve-svg');
+                    const capture = card.querySelector('[data-curve-hover-capture]') || svg;
+                    if (!svg || !capture) return;
+                    const currentViewport = () => activeChartMode() === 'candlestick'
+                      ? activeKlineViewportFromCard(card)
+                      : null;
+                    capture.addEventListener('wheel', (event) => {{
+                      const viewport = currentViewport();
+                      if (!viewport) return;
+                      event.preventDefault();
+                      const anchor = serialFromClientX(card, event.clientX, viewport);
+                      if (!Number.isFinite(anchor)) return;
+                      const rawDelta = Number(event.deltaY) || 0;
+                      const modeScale = event.deltaMode === 1 ? 16 : event.deltaMode === 2 ? 240 : 1;
+                      const cappedDelta = Math.max(-80, Math.min(80, rawDelta * modeScale));
+                      const zoomFactor = Math.exp(cappedDelta * 0.00075);
+                      if (!Number.isFinite(zoomFactor) || Math.abs(zoomFactor - 1) < 0.001) return;
+                      const next = clampKlineViewport(
+                        anchor - (anchor - viewport.start) * zoomFactor,
+                        anchor + (viewport.end - anchor) * zoomFactor,
+                        {{ min: viewport.domainMin, max: viewport.domainMax }}
+                      );
+                      writeKlineViewport(next);
+                      requestKlineRedraw();
+                    }}, {{ passive: false }});
+                    capture.addEventListener('pointerdown', (event) => {{
+                      const viewport = currentViewport();
+                      if (!viewport || event.button !== 0) return;
+                      event.preventDefault();
+                      card._klineDragState = {{
+                        pointerId: event.pointerId,
+                        clientX: event.clientX,
+                        start: viewport.start,
+                        end: viewport.end,
+                        domainMin: viewport.domainMin,
+                        domainMax: viewport.domainMax,
+                      }};
+                      card.classList.add('is-kline-dragging');
+                      if (typeof capture.setPointerCapture === 'function') {{
+                        try {{ capture.setPointerCapture(event.pointerId); }} catch (error) {{}}
+                      }}
+                    }});
+                    capture.addEventListener('pointermove', (event) => {{
+                      const state = card._klineDragState;
+                      if (!state || state.pointerId !== event.pointerId || activeChartMode() !== 'candlestick') return;
+                      event.preventDefault();
+                      const rect = svg.getBoundingClientRect();
+                      const span = state.end - state.start;
+                      if (!Number.isFinite(span) || span <= 0) return;
+                      const serialDelta = ((event.clientX - state.clientX) / Math.max(rect.width, 1)) * span;
+                      const next = clampKlineViewport(
+                        state.start - serialDelta,
+                        state.end - serialDelta,
+                        {{ min: state.domainMin, max: state.domainMax }}
+                      );
+                      writeKlineViewport(next);
+                      requestKlineRedraw();
+                    }});
+                    const endDrag = (event) => {{
+                      const state = card._klineDragState;
+                      if (!state || state.pointerId !== event.pointerId) return;
+                      delete card._klineDragState;
+                      card.classList.remove('is-kline-dragging');
+                      if (typeof capture.releasePointerCapture === 'function') {{
+                        try {{ capture.releasePointerCapture(event.pointerId); }} catch (error) {{}}
+                      }}
+                    }};
+                    capture.addEventListener('pointerup', endDrag);
+                    capture.addEventListener('pointercancel', endDrag);
+                    capture.addEventListener('lostpointercapture', () => {{
+                      delete card._klineDragState;
+                      card.classList.remove('is-kline-dragging');
+                    }});
+                    card.dataset.curveKlineNavBound = '1';
+                  }}
+
                   function drawCard(card, series, range, latest, customStart, customEnd, metric, assists) {{
                     metric = metric === 'amount' ? 'amount' : 'return';
                     assists = assists || activeAssists();
-                    const showExcess = excessVisible();
-                    let points = filteredPoints(series.points || [], range, latest, customStart, customEnd);
+                    const chartMode = activeChartMode();
+                    const showBenchmark = chartMode !== 'candlestick';
+                    const showExcess = showBenchmark && excessVisible();
+                    const seriesLatest = latestIsoForSeries(series) || latest;
+                    let points = filteredPoints(series.points || [], range, seriesLatest, customStart, customEnd);
+                    const fullRangePoints = points;
+                    let klineViewport = null;
+                    if (chartMode === 'candlestick') {{
+                      klineViewport = klineViewportFor(fullRangePoints);
+                      points = pointsInKlineViewport(fullRangePoints, klineViewport);
+                    }}
                     const activeBenchmark = selectedBenchmarkFor(series);
                     const rawBenchmarkPoints = activeBenchmark?.points || [];
-                    const benchmarkPoints = activeBenchmark
-                      ? filteredPoints(rawBenchmarkPoints, range, latest, customStart, customEnd)
-                      : [];
                     const svg = card.querySelector('.curve-svg');
                     if (!svg || !points.length) return;
+                    const first = points[0];
+                    const last = points[points.length - 1];
+                    const valueRange = chartMode === 'candlestick' && klineViewport ? 'custom' : range;
+                    const benchmarkRange = (valueRange === 'custom' || (range === 'all' && first?.iso)) ? 'custom' : range;
+                    const benchmarkStart = benchmarkRange === 'custom' ? (first?.iso || '') : customStart;
+                    const benchmarkEnd = benchmarkRange === 'custom' ? (last?.iso || seriesLatest) : customEnd;
+                    const benchmarkPoints = activeBenchmark
+                      ? filteredPoints(rawBenchmarkPoints, benchmarkRange, seriesLatest, benchmarkStart, benchmarkEnd)
+                      : [];
                     const capital = Number(series.capital) > 0
                       ? Number(series.capital)
                       : Math.max(Math.abs(Number(points[points.length - 1]?.value || 0)), 1);
@@ -1281,51 +1807,87 @@ def render_curve_script(payload: list[dict[str, object]]) -> str:
                       }}
                       return capital;
                     }}
-                    let baseCapital = range === 'all' ? capital : capitalForPoint(points[0]);
+                    let baseCapital = valueRange === 'all' ? capital : capitalForPoint(points[0]);
                     if (!Number.isFinite(baseCapital) || baseCapital <= 0) baseCapital = capital;
+                    function profitValueForPoint(point) {{
+                      const totalValue = Number(point?.total_value);
+                      if (Number.isFinite(totalValue)) return totalValue;
+                      const value = Number(point?.value);
+                      return Number.isFinite(value) ? value : 0;
+                    }}
+                    function pointNumberValue(point, key) {{
+                      if (!point || !Object.prototype.hasOwnProperty.call(point, key)) return NaN;
+                      const value = Number(point[key]);
+                      return Number.isFinite(value) ? value : NaN;
+                    }}
+                    function accountAssetValue(point) {{
+                      if (!point) return NaN;
+                      const marketValue = pointNumberValue(point, 'market_value');
+                      if (Number.isFinite(marketValue)) return Math.max(marketValue, 0);
+                      const pointCapital = pointNumberValue(point, 'capital');
+                      const floatValue = Number(point?.float_value);
+                      if (pointCapital >= 0 && Number.isFinite(floatValue)) return Math.max(pointCapital + floatValue, 0);
+                      const totalValue = profitValueForPoint(point);
+                      if (pointCapital >= 0 && Number.isFinite(totalValue)) return Math.max(pointCapital + totalValue, 0);
+                      const carried = capitalForPoint(point);
+                      return carried > 0 && Number.isFinite(totalValue) ? Math.max(carried + totalValue, 0) : NaN;
+                    }}
+                    function externalFlowForPoint(point) {{
+                      const flow = Number(point?.net_flow ?? point?.flow ?? 0);
+                      return Number.isFinite(flow) ? flow : 0;
+                    }}
                     function referenceCapitalFor(visiblePoints, fallbackCapital) {{
                       const capitals = (visiblePoints || [])
-                        .map((point) => capitalForPoint(point))
+                        .map((point) => accountAssetValue(point))
                         .filter((value) => Number.isFinite(value) && value > 0);
                       if (!capitals.length) return fallbackCapital > 0 ? fallbackCapital : capital;
                       return Math.max(...capitals);
                     }}
                     let referenceCapital = referenceCapitalFor(points, baseCapital);
                     function returnBaseForPoint(point, previousPoint) {{
-                      const previousCapital = capitalForPoint(previousPoint);
-                      if (previousCapital > 0) return previousCapital;
-                      const currentCapital = capitalForPoint(point);
-                      if (currentCapital > 0) return currentCapital;
+                      const previousAsset = accountAssetValue(previousPoint);
+                      if (previousAsset > 0) return previousAsset;
+                      const currentAsset = accountAssetValue(point);
+                      if (currentAsset > 0) return currentAsset;
                       return baseCapital;
                     }}
                     function accountValuesFrom(visiblePoints, periodCapital, rangeMode) {{
-                      const rangeBaseAmount = rangeMode === 'all' ? 0 : Number(visiblePoints[0]?.value || 0);
+                      const rangeBaseAmount = rangeMode === 'all' ? 0 : profitValueForPoint(visiblePoints[0]);
                       let accountReturnGrowth = 1;
                       return visiblePoints.map((point, index) => {{
                         const previousPoint = index > 0 ? visiblePoints[index - 1] : null;
-                        const delta = previousPoint ? Number(point.value || 0) - Number(previousPoint.value || 0) : 0;
+                        const dailyProfit = previousPoint ? profitValueForPoint(point) - profitValueForPoint(previousPoint) : 0;
+                        const currentAsset = accountAssetValue(point);
+                        const previousAsset = previousPoint ? accountAssetValue(previousPoint) : currentAsset;
+                        const assetChange = previousPoint && Number.isFinite(currentAsset) && Number.isFinite(previousAsset)
+                          ? currentAsset - previousAsset
+                          : 0;
                         const returnBase = returnBaseForPoint(point, previousPoint);
-                        const dailyReturn = returnBase > 0 ? (delta / returnBase) * 100 : 0;
+                        const externalFlow = previousPoint ? externalFlowForPoint(point) : 0;
+                        const investmentPnl = assetChange - externalFlow;
+                        const dailyReturn = returnBase > 0 ? (investmentPnl / returnBase) * 100 : 0;
                         if (index > 0 && Number.isFinite(dailyReturn)) accountReturnGrowth *= 1 + dailyReturn / 100;
                         const cumulativeReturnValue = (accountReturnGrowth - 1) * 100;
-                        const floatAmount = Number(point.value || 0);
+                        const floatAmount = profitValueForPoint(point);
                         const periodAmount = floatAmount - rangeBaseAmount;
                         return {{
                           ...point,
-                          dailyAmountValue: delta,
+                          dailyAmountValue: dailyProfit,
                           dailyReturn,
                           amountValue: periodAmount,
                           cumulativeAmountValue: periodAmount,
                           rawAmountValue: floatAmount,
                           baseCapital: returnBase > 0 ? returnBase : baseCapital,
+                          accountAssetValue: currentAsset,
+                          externalFlow,
                           referenceCapital: periodCapital,
                           returnValue: cumulativeReturnValue,
                           cumulativeReturnValue,
                         }};
                       }});
                     }}
-                    let accountValues = accountValuesFrom(points, referenceCapital, range);
-                    const firstBenchmarkClose = benchmarkBaseClose(rawBenchmarkPoints, range, latest, customStart, customEnd, benchmarkPoints);
+                    let accountValues = accountValuesFrom(points, referenceCapital, valueRange);
+                    const firstBenchmarkClose = benchmarkBaseClose(rawBenchmarkPoints, benchmarkRange, seriesLatest, benchmarkStart, benchmarkEnd, benchmarkPoints);
                     let benchmarkGrowth = 1;
                     let benchmarkAmountTotal = 0;
                     const benchmarkValues = firstBenchmarkClose > 0
@@ -1336,8 +1898,10 @@ def render_curve_script(payload: list[dict[str, object]]) -> str:
                           const dailyReturn = previousClose > 0 ? ((close / previousClose) - 1) * 100 : 0;
                           if (index > 0 && Number.isFinite(dailyReturn)) benchmarkGrowth *= 1 + dailyReturn / 100;
                           const cumulativeReturnValue = (benchmarkGrowth - 1) * 100;
-                          const accountPoint = pointAtOrBeforeSerial(accountValues, Number(point.serial));
-                          const benchmarkCapital = capitalForPoint(accountPoint) || referenceCapital;
+                          const benchmarkSerial = Number(point.serial);
+                          const previousAccountPoint = pointBeforeSerial(accountValues, benchmarkSerial);
+                          const accountPoint = pointAtOrBeforeSerial(accountValues, benchmarkSerial);
+                          const benchmarkCapital = accountAssetValue(previousAccountPoint) || accountAssetValue(accountPoint) || referenceCapital;
                           const dailyAmountValue = index > 0 && benchmarkCapital > 0
                             ? (dailyReturn / 100) * benchmarkCapital
                             : 0;
@@ -1379,7 +1943,7 @@ def render_curve_script(payload: list[dict[str, object]]) -> str:
                       }};
                     }}).filter((point) => Number.isFinite(Number(point.metricValue)));
                     const visibleOverlayPoints = showExcess ? excessMetricValues : [];
-                    const allSeriesPoints = accountMetricValues.concat(benchmarkMetricValues, visibleOverlayPoints)
+                    const allSeriesPoints = accountMetricValues.concat(showBenchmark ? benchmarkMetricValues : [], visibleOverlayPoints)
                       .filter((point) => Number.isFinite(Number(point.metricValue)));
                     let minSerial = Math.min(...allSeriesPoints.map((point) => Number(point.serial)));
                     let maxSerial = Math.max(...allSeriesPoints.map((point) => Number(point.serial)));
@@ -1396,12 +1960,12 @@ def render_curve_script(payload: list[dict[str, object]]) -> str:
                     const positions = accountMetricValues.map((point) => [pointX(Number(point.serial)), pointY(Number(point.metricValue)), Number(point.metricValue)]);
                     const benchmarkPositions = benchmarkMetricValues.map((point) => [pointX(Number(point.serial)), pointY(Number(point.metricValue)), Number(point.metricValue)]);
                     const excessPositions = visibleOverlayPoints.map((point) => [pointX(Number(point.serial)), pointY(Number(point.metricValue)), Number(point.metricValue)]);
+                    const candleInterval = effectiveCandleInterval(range, accountMetricValues);
+                    const candles = chartMode === 'candlestick' ? aggregateCandles(accountMetricValues, candleInterval) : [];
                     const linePath = linePathFromPositions(positions);
                     const benchmarkPath = linePathFromPositions(benchmarkPositions);
                     const excessPath = linePathFromPositions(excessPositions);
                     const zeroY = pointY(0);
-                    const first = points[0];
-                    const last = points[points.length - 1];
                     const firstPos = positions[0];
                     const lastPos = positions[positions.length - 1];
                     const periodPnl = accountValues[accountValues.length - 1]?.amountValue;
@@ -1435,10 +1999,12 @@ def render_curve_script(payload: list[dict[str, object]]) -> str:
                         gridLines.appendChild(line);
                         if (yLabels) {{
                           const label = document.createElementNS('http://www.w3.org/2000/svg', 'text');
-                          label.setAttribute('class', 'curve-axis-label curve-y-label');
-                          label.setAttribute('x', String(dims.width - 10));
-                          label.setAttribute('y', (y + 4).toFixed(2));
-                          label.setAttribute('text-anchor', 'end');
+                          const tone = tick > 0 ? 'positive' : tick < 0 ? 'negative' : 'zero';
+                          label.setAttribute('class', `curve-axis-label curve-y-label curve-y-label-${{tone}}`);
+                          label.setAttribute('x', String(dims.width - dims.right + 16));
+                          label.setAttribute('y', y.toFixed(2));
+                          label.setAttribute('dominant-baseline', 'middle');
+                          label.setAttribute('text-anchor', 'start');
                           label.textContent = axisText(tick, metric);
                           yLabels.appendChild(label);
                         }}
@@ -1466,6 +2032,7 @@ def render_curve_script(payload: list[dict[str, object]]) -> str:
                         }}
                         if (labelNode) {{
                           const x = side === 'right' ? dims.width - dims.right - 8 : dims.left + 8;
+                          labelNode.setAttribute('class', svgNumberClass(`curve-extreme-label curve-extreme-label-${{side === 'right' ? 'max' : 'min'}}`, item.value));
                           labelNode.setAttribute('x', String(x));
                           labelNode.setAttribute('y', String(Math.max(dims.top + 12, Math.min(dims.top + dims.innerHeight - 4, y - 6))));
                           labelNode.setAttribute('text-anchor', side === 'right' ? 'end' : 'start');
@@ -1481,6 +2048,7 @@ def render_curve_script(payload: list[dict[str, object]]) -> str:
 
                     const line = card.querySelector('[data-curve-line]');
                     const glow = card.querySelector('[data-curve-line-glow]');
+                    const candleLayer = card.querySelector('[data-curve-candles]');
                     const benchmarkLine = card.querySelector('[data-curve-benchmark-line]');
                     const excessLine = card.querySelector('[data-curve-excess-line]');
                     const drawdownBand = card.querySelector('[data-curve-drawdown-band]');
@@ -1499,14 +2067,30 @@ def render_curve_script(payload: list[dict[str, object]]) -> str:
                     const growthCaption = card.querySelector('[data-curve-growth-caption]');
                     const area = card.querySelector('[data-curve-area]');
                     const zero = card.querySelector('[data-curve-zero-line]');
-                    if (line) line.setAttribute('d', linePath);
-                    if (glow) glow.setAttribute('d', linePath);
-                    if (benchmarkLine) benchmarkLine.setAttribute('d', benchmarkPath);
+                    if (line) {{
+                      line.setAttribute('d', linePath);
+                      setSvgHidden(line, chartMode === 'candlestick');
+                    }}
+                    if (glow) {{
+                      glow.setAttribute('d', linePath);
+                      setSvgHidden(glow, chartMode === 'candlestick');
+                    }}
+                    if (candleLayer) {{
+                      drawCandles(candleLayer, candles, pointX, pointY);
+                      setSvgHidden(candleLayer, chartMode !== 'candlestick' || !candles.length);
+                    }}
+                    if (benchmarkLine) {{
+                      benchmarkLine.setAttribute('d', benchmarkPath);
+                      setSvgHidden(benchmarkLine, !showBenchmark || !benchmarkPositions.length);
+                    }}
                     if (excessLine) {{
                       excessLine.setAttribute('d', excessPath);
                       setSvgHidden(excessLine, !showExcess || !excessPositions.length);
                     }}
-                    if (area) area.setAttribute('d', areaPath);
+                    if (area) {{
+                      area.setAttribute('d', areaPath);
+                      setSvgHidden(area, chartMode === 'candlestick');
+                    }}
                     if (drawdown && positions[drawdown.peakIndex] && positions[drawdown.troughIndex]) {{
                       const peakPos = positions[drawdown.peakIndex];
                       const troughPos = positions[drawdown.troughIndex];
@@ -1535,9 +2119,11 @@ def render_curve_script(payload: list[dict[str, object]]) -> str:
                         drawdownTrough.setAttribute('r', '3.8');
                       }}
                       if (drawdownLabel) {{
+                        const labelValue = metric === 'amount' ? drawdown.amount : drawdown.rate;
                         const labelText = metric === 'amount' ? displaySignedMoneyText(drawdown.amount) : percentText(drawdown.rate);
                         const labelX = Math.max(dims.left + 8, Math.min(dims.width - dims.right - 8, troughPos[0] - 6));
                         const labelY = Math.max(dims.top + 14, Math.min(dims.top + dims.innerHeight - 4, troughPos[1] - 8));
+                        drawdownLabel.setAttribute('class', svgNumberClass('curve-drawdown-label', labelValue));
                         drawdownLabel.setAttribute('x', labelX.toFixed(2));
                         drawdownLabel.setAttribute('y', labelY.toFixed(2));
                         drawdownLabel.setAttribute('text-anchor', 'end');
@@ -1596,9 +2182,11 @@ def render_curve_script(payload: list[dict[str, object]]) -> str:
                         growthPeak.setAttribute('r', '3.8');
                       }}
                       if (growthLabel) {{
+                        const labelValue = metric === 'amount' ? growth.amount : growth.rate;
                         const labelText = metric === 'amount' ? displaySignedMoneyText(growth.amount) : percentText(growth.rate);
                         const labelX = Math.max(dims.left + 8, Math.min(dims.width - dims.right - 8, peakPos[0] + 6));
                         const labelY = Math.max(dims.top + 14, Math.min(dims.top + dims.innerHeight - 4, peakPos[1] - 8));
+                        growthLabel.setAttribute('class', svgNumberClass('curve-growth-label', labelValue));
                         growthLabel.setAttribute('x', labelX.toFixed(2));
                         growthLabel.setAttribute('y', labelY.toFixed(2));
                         growthLabel.setAttribute('text-anchor', 'start');
@@ -1635,15 +2223,17 @@ def render_curve_script(payload: list[dict[str, object]]) -> str:
                     const dots = card.querySelector('[data-curve-dots]');
                     if (dots) {{
                       dots.innerHTML = '';
-                      [firstPos, lastPos].forEach((position, index) => {{
-                        const dot = document.createElementNS('http://www.w3.org/2000/svg', 'circle');
-                        dot.setAttribute('class', index ? 'curve-dot curve-dot-last' : 'curve-dot');
-                        dot.setAttribute('cx', position[0].toFixed(2));
-                        dot.setAttribute('cy', position[1].toFixed(2));
-                        dot.setAttribute('r', index ? '4.8' : '3.2');
-                        dots.appendChild(dot);
-                      }});
-                      if (benchmarkPositions.length) {{
+                      if (chartMode !== 'candlestick') {{
+                        [firstPos, lastPos].forEach((position, index) => {{
+                          const dot = document.createElementNS('http://www.w3.org/2000/svg', 'circle');
+                          dot.setAttribute('class', index ? 'curve-dot curve-dot-last' : 'curve-dot');
+                          dot.setAttribute('cx', position[0].toFixed(2));
+                          dot.setAttribute('cy', position[1].toFixed(2));
+                          dot.setAttribute('r', index ? '4.8' : '3.2');
+                          dots.appendChild(dot);
+                        }});
+                      }}
+                      if (showBenchmark && benchmarkPositions.length) {{
                         const benchmarkLast = benchmarkPositions[benchmarkPositions.length - 1];
                         const dot = document.createElementNS('http://www.w3.org/2000/svg', 'circle');
                         dot.setAttribute('class', 'curve-benchmark-dot');
@@ -1668,9 +2258,9 @@ def render_curve_script(payload: list[dict[str, object]]) -> str:
                     const hoverDotMe = card.querySelector('[data-curve-hover-dot-me]');
                     const hoverDotBase = card.querySelector('[data-curve-hover-dot-base]');
                     const hoverDotExcess = card.querySelector('[data-curve-hover-dot-excess]');
-                    const hoverPoints = accountMetricValues.map((point, index) => {{
+                    const lineHoverPoints = accountMetricValues.map((point, index) => {{
                       const position = positions[index];
-                      const benchmarkPoint = pointAtOrBeforeSerial(benchmarkMetricValues, Number(point.serial));
+                      const benchmarkPoint = showBenchmark ? pointAtOrBeforeSerial(benchmarkMetricValues, Number(point.serial)) : null;
                       const benchmarkMetric = benchmarkPoint ? valueForMetric(benchmarkPoint, metric) : NaN;
                       const benchmark = benchmarkPoint && Number.isFinite(benchmarkMetric)
                         ? {{
@@ -1704,10 +2294,33 @@ def render_curve_script(payload: list[dict[str, object]]) -> str:
                         excess,
                       }};
                     }}).filter((point) => Number.isFinite(point.x) && Number.isFinite(point.y));
+                    const candleHoverPoints = candles.map((candle) => {{
+                      const serial = Number(candle.serial);
+                      const close = Number(candle.close);
+                      const high = Number(candle.high);
+                      const x = pointX(serial);
+                      const y = pointY(close);
+                      const highY = pointY(high);
+                      const startDate = dateLabelFromIso(candle.startIso);
+                      const endDate = dateLabelFromIso(candle.endIso);
+                      const date = startDate && endDate && startDate !== endDate
+                        ? `${{startDate}} 至 ${{endDate}}`
+                        : (startDate || endDate || candle.label || '');
+                      return {{
+                        date,
+                        x,
+                        y,
+                        highY,
+                        candle,
+                      }};
+                    }}).filter((point) => Number.isFinite(point.x) && Number.isFinite(point.y));
+                    const hoverPoints = chartMode === 'candlestick' ? candleHoverPoints : lineHoverPoints;
                     card._curveHoverState = {{
+                      chartMode,
                       metric,
                       showExcess,
                       benchmarkLabel: activeBenchmark?.label || '市场基准',
+                      candleIntervalLabel: candleIntervalLabel(candleInterval),
                       points: hoverPoints,
                       hoverLayer,
                       hoverLine,
@@ -1716,6 +2329,7 @@ def render_curve_script(payload: list[dict[str, object]]) -> str:
                       hoverDotExcess,
                     }};
                     installHoverHandlers(card);
+                    installKlineNavigationHandlers(card);
                     setSvgHidden(hoverLayer, true);
 
                     const subtitle = card.querySelector('[data-curve-subtitle]');
@@ -1723,10 +2337,12 @@ def render_curve_script(payload: list[dict[str, object]]) -> str:
                     const startLabel = card.querySelector('[data-curve-start-label]');
                     const endLabel = card.querySelector('[data-curve-end-label]');
                     const endValue = card.querySelector('[data-curve-end-value]');
-                    if (subtitle) subtitle.textContent = `${{first.date}} 至 ${{last.date}}`;
+                    if (subtitle) subtitle.textContent = chartMode === 'candlestick'
+                      ? `${{first.date}} 至 ${{last.date}} · ${{candleIntervalLabel(candleInterval)}}`
+                      : `${{first.date}} 至 ${{last.date}}`;
                     if (badge) {{
                       const badgeValue = metric === 'amount' ? periodPnl : periodReturn;
-                      const badgeLabel = metric === 'amount' ? rangePnlLabel(range) : rangeRateLabel(range);
+                      const badgeLabel = metric === 'amount' ? rangePnlLabel(valueRange) : rangeRateLabel(valueRange);
                       badge.className = classForValue(badgeValue);
                       badge.textContent = `${{badgeLabel}} ${{metricText(badgeValue, metric)}}`;
                     }}
@@ -1738,6 +2354,19 @@ def render_curve_script(payload: list[dict[str, object]]) -> str:
                       endValue.setAttribute('y', String(Math.max(dims.top, Math.min(dims.top + dims.innerHeight - 2, lastPos[1] - 8))));
                     }}
                     card.dataset.curveMetric = metric;
+                    card.dataset.curveChartMode = chartMode;
+                    card.dataset.curveCandleInterval = candleInterval;
+                    if (klineViewport) {{
+                      card.dataset.curveKlineDomainMin = String(klineViewport.domainMin);
+                      card.dataset.curveKlineDomainMax = String(klineViewport.domainMax);
+                      card.dataset.curveKlineViewportStart = String(klineViewport.start);
+                      card.dataset.curveKlineViewportEnd = String(klineViewport.end);
+                    }} else {{
+                      delete card.dataset.curveKlineDomainMin;
+                      delete card.dataset.curveKlineDomainMax;
+                      delete card.dataset.curveKlineViewportStart;
+                      delete card.dataset.curveKlineViewportEnd;
+                    }}
                     card.dataset.accountReturn = Number.isFinite(periodReturn) ? String(periodReturn) : '';
                     card.dataset.benchmarkReturn = Number.isFinite(periodBenchmarkReturn) ? String(periodBenchmarkReturn) : '';
                     card.dataset.excessReturn = Number.isFinite(periodExcessReturn) ? String(periodExcessReturn) : '';
@@ -1747,8 +2376,8 @@ def render_curve_script(payload: list[dict[str, object]]) -> str:
                     card.dataset.benchmarkLabel = activeBenchmark?.label || '市场基准';
                     card.dataset.periodPnl = Number.isFinite(periodPnl) ? String(periodPnl) : '';
                     card.dataset.periodReturn = Number.isFinite(periodReturn) ? String(periodReturn) : '';
-                    card.dataset.periodLabel = rangePnlLabel(range);
-                    card.dataset.periodRateLabel = rangeRateLabel(range);
+                    card.dataset.periodLabel = rangePnlLabel(valueRange);
+                    card.dataset.periodRateLabel = rangeRateLabel(valueRange);
                     card.dataset.periodStart = first.date || '';
                     card.dataset.periodEnd = last.date || '';
                   }}
@@ -1763,7 +2392,7 @@ def render_curve_script(payload: list[dict[str, object]]) -> str:
                   }}
 
                   function updateCurveSummary(metric) {{
-                    const primaryCard = root.querySelector('[data-return-curve-card]');
+                    const primaryCard = activeCurveCard();
                     if (!primaryCard) return;
                     const metricMode = metric === 'amount' ? 'amount' : 'return';
                     const accountValue = Number(primaryCard.dataset[metricMode === 'amount' ? 'accountAmount' : 'accountReturn'] || 'NaN');
@@ -1776,6 +2405,8 @@ def render_curve_script(payload: list[dict[str, object]]) -> str:
                     const benchmark = root.querySelector('[data-curve-summary-benchmark]');
                     const benchmarkName = root.querySelector('[data-curve-summary-benchmark-name]');
                     const legendBenchmark = root.querySelector('[data-curve-legend-benchmark]');
+                    const legendMine = root.querySelector('[data-curve-legend-mine]');
+                    const series = selectedSeries();
                     const summary = root.querySelector('[data-curve-summary-title]')?.closest('.ths-curve-summary');
                     const barScale = Math.max(Math.abs(accountValue || 0), Math.abs(benchmarkValue || 0), 1);
                     if (summary) summary.classList.toggle('is-empty', !Number.isFinite(benchmarkValue));
@@ -1789,8 +2420,15 @@ def render_curve_script(payload: list[dict[str, object]]) -> str:
                     if (benchmark) benchmark.textContent = metricText(benchmarkValue, metricMode);
                     if (benchmarkName) benchmarkName.textContent = `${{benchmarkLabel}}:`;
                     if (legendBenchmark) legendBenchmark.textContent = benchmarkLabel;
+                    if (legendMine) legendMine.textContent = String(series?.scopeLabel || '汇总');
                     updateSummaryBar(mine?.closest('div'), accountValue, barScale);
                     updateSummaryBar(benchmark?.closest('div'), benchmarkValue, barScale);
+                  }}
+
+                  function updateChartModeMeta() {{
+                    const chartMode = activeChartMode();
+                    const tabs = root.querySelector('[data-curve-candle-tabs]');
+                    if (tabs) tabs.hidden = chartMode !== 'candlestick';
                   }}
 
                   function setToneClass(node, value, baseClass) {{
@@ -1814,7 +2452,7 @@ def render_curve_script(payload: list[dict[str, object]]) -> str:
 
                   function updateCurveHero(range, metric) {{
                     metric = metric === 'amount' ? 'amount' : 'return';
-                    const primaryCard = root.querySelector('[data-return-curve-card]');
+                    const primaryCard = activeCurveCard();
                     if (!primaryCard) return;
                     const kicker = root.querySelector('[data-curve-hero-kicker]');
                     const value = root.querySelector('[data-curve-hero-value]');
@@ -1862,13 +2500,20 @@ def render_curve_script(payload: list[dict[str, object]]) -> str:
                     const latest = latestIso();
                     const customStart = root.querySelector('[data-curve-custom-start]')?.value || '';
                     const customEnd = root.querySelector('[data-curve-custom-end]')?.value || '';
+                    const activeScope = activeScopeId();
+                    if (activeChartMode() === 'candlestick' && !activeCandleButton()) {{
+                      setCandleInterval(activeCandleInterval() || 'week', false);
+                    }}
                     root.querySelectorAll('[data-return-curve-card]').forEach((card) => {{
                       const index = Number(card.dataset.seriesIndex || '0');
                       const series = seriesList[index];
-                      if (series) drawCard(card, series, range, latest, customStart, customEnd, metric, assists);
+                      const visible = String(series?.scope || 'all') === activeScope;
+                      card.hidden = !visible;
+                      if (visible && series) drawCard(card, series, range, latest, customStart, customEnd, metric, assists);
                     }});
                     updateCurveHero(range, metric);
                     updateCurveSummary(metric);
+                    updateChartModeMeta();
                     const custom = root.querySelector('[data-curve-custom]');
                     if (custom) custom.hidden = range !== 'custom';
                   }}
@@ -1877,6 +2522,7 @@ def render_curve_script(payload: list[dict[str, object]]) -> str:
                     button.addEventListener('click', () => {{
                       root.querySelectorAll('.ths-curve-tab').forEach((item) => item.classList.remove('is-active'));
                       button.classList.add('is-active');
+                      resetKlineViewport();
                       redraw();
                     }});
                   }});
@@ -1891,6 +2537,24 @@ def render_curve_script(payload: list[dict[str, object]]) -> str:
                       const nextActive = !seriesToggle.classList.contains('is-active');
                       seriesToggle.classList.toggle('is-active', nextActive);
                       seriesToggle.setAttribute('aria-pressed', nextActive ? 'true' : 'false');
+                      redraw();
+                      return;
+                    }}
+                    const scopeButton = event.target?.closest?.('.ths-curve-scope');
+                    if (scopeButton && root.contains(scopeButton)) {{
+                      root.querySelectorAll('.ths-curve-scope').forEach((item) => {{
+                        const active = item === scopeButton;
+                        item.classList.toggle('is-active', active);
+                        item.setAttribute('aria-pressed', active ? 'true' : 'false');
+                      }});
+                      root.dataset.curveScope = scopeButton.dataset.curveScope || 'all';
+                      resetKlineViewport();
+                      root.querySelectorAll('.ths-curve-benchmark').forEach((item) => {{
+                        item.classList.remove('is-active');
+                        item.setAttribute('aria-pressed', 'false');
+                      }});
+                      root.dataset.curveBenchmark = defaultBenchmarkForSeries(selectedSeries());
+                      updateBenchmarkTabs();
                       redraw();
                       return;
                     }}
@@ -1912,6 +2576,22 @@ def render_curve_script(payload: list[dict[str, object]]) -> str:
                       redraw();
                       return;
                     }}
+                    const chartModeButton = event.target?.closest?.('.ths-curve-chart-mode');
+                    if (chartModeButton && root.contains(chartModeButton)) {{
+                      const nextMode = chartModeButton.dataset.curveChartMode === 'candlestick' ? 'candlestick' : 'line';
+                      root.querySelectorAll('.ths-curve-chart-mode').forEach((item) => item.classList.remove('is-active'));
+                      chartModeButton.classList.add('is-active');
+                      if (nextMode === 'candlestick' && !activeCandleButton()) setCandleInterval(activeCandleInterval() || 'week', false);
+                      resetKlineViewport();
+                      redraw();
+                      return;
+                    }}
+                    const candleButton = event.target?.closest?.('.ths-curve-candle-interval');
+                    if (candleButton && root.contains(candleButton)) {{
+                      setCandleInterval(candleButton.dataset.curveCandleInterval || 'day', true);
+                      redraw();
+                      return;
+                    }}
                     const assistButton = event.target?.closest?.('.ths-curve-assist:not(.is-fixed)');
                     if (assistButton && root.contains(assistButton)) {{
                       const nextActive = !assistButton.classList.contains('is-active');
@@ -1921,10 +2601,19 @@ def render_curve_script(payload: list[dict[str, object]]) -> str:
                     }}
                   }});
                   root.querySelectorAll('[data-curve-custom-start], [data-curve-custom-end]').forEach((input) => {{
-                    input.addEventListener('change', redraw);
+                    input.addEventListener('change', () => {{
+                      resetKlineViewport();
+                      redraw();
+                    }});
                   }});
-                  window.addEventListener('trade-tracker-reporting-currency-change', redraw);
+                  window.addEventListener('trade-tracker-reporting-currency-change', () => {{
+                    resetKlineViewport();
+                    redraw();
+                  }});
+                  if (!activeCandleInterval()) setCandleInterval('week', false);
                   restoreMoneyPrivacy();
+                  updateScopeTabs();
+                  root.dataset.curveBenchmark = defaultBenchmarkForSeries(selectedSeries());
                   updateBenchmarkTabs();
                   if (document.readyState === 'loading') {{
                     document.addEventListener('DOMContentLoaded', redraw, {{ once: true }});

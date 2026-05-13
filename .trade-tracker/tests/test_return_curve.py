@@ -57,15 +57,15 @@ class ReturnCurveTests(unittest.TestCase):
                         "currency": "人民币",
                         "capital": 100,
                         "points": [
-                            {"date": "2026/05/01", "serial": 46143, "value": 10, "capital": 100},
-                            {"date": "2026/05/03", "serial": 46145, "value": 20, "capital": 120},
+                            {"date": "2026/05/01", "serial": 46143, "value": 10, "capital": 100, "market_value": 110, "net_flow": 100},
+                            {"date": "2026/05/03", "serial": 46145, "value": 20, "capital": 120, "market_value": 140, "net_flow": -20},
                         ],
                     },
                     {
                         "currency": "港币",
                         "capital": 200,
                         "points": [
-                            {"date": "2026/05/02", "serial": 46144, "value": 30, "capital": 200},
+                            {"date": "2026/05/02", "serial": 46144, "value": 30, "capital": 200, "market_value": 230, "net_flow": 50},
                         ],
                     },
                 ]
@@ -75,8 +75,12 @@ class ReturnCurveTests(unittest.TestCase):
         self.assertEqual(len(series["points"]), 3)
         self.assertAlmostEqual(series["points"][1]["value"], 37.0)
         self.assertAlmostEqual(series["points"][1]["capital"], 280.0)
+        self.assertAlmostEqual(series["points"][1]["market_value"], 317.0)
+        self.assertAlmostEqual(series["points"][1]["net_flow"], 45.0)
         self.assertAlmostEqual(series["points"][2]["value"], 47.0)
         self.assertAlmostEqual(series["points"][2]["capital"], 300.0)
+        self.assertAlmostEqual(series["points"][2]["market_value"], 347.0)
+        self.assertAlmostEqual(series["points"][2]["net_flow"], -20.0)
 
     def test_curve_payload_collapses_same_day_to_last_point(self):
         with (
@@ -143,13 +147,31 @@ class ReturnCurveTests(unittest.TestCase):
         self.assertIn("dataset.defaultText", html)
         self.assertIn("valueForMetric", html)
         self.assertIn("metricText", html)
+        self.assertIn("const candleWidth = Math.max(1.2, Math.min(12", html)
+        self.assertIn("const rawHeight = Math.abs(closeY - openY)", html)
+        self.assertIn("body.setAttribute('rx', '0')", html)
+        self.assertIn("resetKlineViewport", html)
+        self.assertIn("curveKlineStartSerial", html)
+        self.assertIn("installKlineNavigationHandlers", html)
+        self.assertIn("addEventListener('wheel'", html)
+        self.assertIn("activeCandleButton", html)
+        self.assertIn("setCandleInterval('week', false)", html)
+        self.assertIn("Math.exp(cappedDelta * 0.00075)", html)
+        self.assertNotIn("data-curve-candle-interval=\"day\"", html)
+        self.assertNotIn(">日K</button>", html)
         self.assertIn("dailyReturn", html)
         self.assertIn("cumulativeReturnValue", html)
         self.assertIn("cumulativeAmountValue", html)
-        self.assertIn("dailyAmountValue: delta", html)
+        self.assertIn("dailyAmountValue: dailyProfit", html)
         self.assertIn("rangeBaseAmount", html)
         self.assertIn("amountValue: periodAmount", html)
         self.assertIn("rawAmountValue: floatAmount", html)
+        self.assertIn("profitValueForPoint", html)
+        self.assertIn("accountAssetValue", html)
+        self.assertIn("externalFlowForPoint", html)
+        self.assertIn("pointNumberValue", html)
+        self.assertIn("currentAsset - previousAsset", html)
+        self.assertIn("assetChange - externalFlow", html)
         self.assertIn("let accountReturnGrowth = 1", html)
         self.assertIn("accountReturnGrowth *= 1 + dailyReturn / 100", html)
         self.assertNotIn("rangeMode === 'all' ? pointCapital : periodCapital", html)
@@ -165,6 +187,15 @@ class ReturnCurveTests(unittest.TestCase):
         self.assertIn("dailyExcessValue", html)
         self.assertIn("installHoverHandlers", html)
         self.assertIn("clampedViewX", html)
+        self.assertIn("lineHoverPoints", html)
+        self.assertIn("candleHoverPoints", html)
+        self.assertIn("state.chartMode === 'candlestick'", html)
+        self.assertIn("<span>开盘</span>", html)
+        self.assertIn("<span>最高</span>", html)
+        self.assertIn("<span>最低</span>", html)
+        self.assertIn("<span>收盘</span>", html)
+        self.assertIn("<span>区间变化</span>", html)
+        self.assertIn("<span>振幅</span>", html)
         self.assertIn("activeAssists", html)
         self.assertIn("root.addEventListener('click'", html)
         self.assertIn("maxDrawdownFor", html)
@@ -180,6 +211,11 @@ class ReturnCurveTests(unittest.TestCase):
         self.assertIn("data-curve-growth-caption", html)
         self.assertIn("data-curve-extreme-layer", html)
         self.assertIn("data-curve-extreme-max-label", html)
+        self.assertIn("const tone = tick > 0 ? 'positive' : tick < 0 ? 'negative' : 'zero'", html)
+        self.assertIn("curve-y-label-${tone}", html)
+        self.assertIn("dims.width - dims.right + 16", html)
+        self.assertIn("dominant-baseline", html)
+        self.assertIn("text-anchor', 'start'", html)
         self.assertIn("收益率最大回撤", html)
         self.assertIn("利润最大回撤", html)
         self.assertIn("收益率最大增长", html)
@@ -199,7 +235,9 @@ class ReturnCurveTests(unittest.TestCase):
         self.assertIn("dataset.accountAmount", html)
         self.assertIn("dataset.periodPnl", html)
         self.assertIn("benchmarkAmountTotal", html)
-        self.assertIn("const benchmarkCapital = capitalForPoint(accountPoint) || referenceCapital", html)
+        self.assertIn("pointBeforeSerial", html)
+        self.assertIn("const previousAccountPoint = pointBeforeSerial(accountValues, benchmarkSerial)", html)
+        self.assertIn("const benchmarkCapital = accountAssetValue(previousAccountPoint) || accountAssetValue(accountPoint) || referenceCapital", html)
         self.assertIn("trade-tracker-return-curve-money-hidden-v1", html)
         self.assertIn("displaySignedMoneyText", html)
         self.assertIn("moneyHidden()", html)

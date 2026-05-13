@@ -308,7 +308,7 @@ def render_metric(
     detail_attrs = f' data-reporting-note-template="{html.escape(detail_template)}"' if detail_template else ""
     detail_html = f'<span{detail_attrs}>{html.escape(detail)}</span>' if detail else ""
     return (
-        '<div class="holdings-account-metric">'
+        '<div class="holdings-account-metric holdings-account-stat">'
         f'<span class="holdings-account-label">{html.escape(label)}</span>'
         f'<strong class="{html.escape(class_attr)}"{reporting_money_attrs(reporting_value, signed)}>{html.escape(value)}</strong>'
         f"{detail_html}"
@@ -410,7 +410,7 @@ def render_holdings_realized_metric(month: dict[str, object]) -> str:
         if key in ranges
     )
     return (
-        '<div class="holdings-account-metric holdings-month-metric" data-holdings-range-card>'
+        '<div class="holdings-account-metric holdings-account-trend holdings-month-metric" data-holdings-range-card>'
         '<div class="holdings-realized-head">'
         '<span class="holdings-month-label">已实现</span>'
         f'<div class="holdings-range-tabs" aria-label="选择已实现盈亏区间">{buttons}</div>'
@@ -455,7 +455,7 @@ def render_reference_metric(reference: dict[str, object]) -> str:
         if key in ranges
     )
     return (
-        '<div class="holdings-account-metric holdings-month-metric" data-holdings-reference-card data-holdings-range-card>'
+        '<div class="holdings-account-metric holdings-account-trend holdings-month-metric" data-holdings-reference-card data-holdings-range-card>'
         '<div class="holdings-realized-head">'
         '<span class="holdings-month-label">现持仓浮盈</span>'
         f'<div class="holdings-range-tabs" aria-label="选择现持仓浮盈区间">{buttons}</div>'

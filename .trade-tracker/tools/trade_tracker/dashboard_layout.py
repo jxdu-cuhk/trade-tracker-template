@@ -136,6 +136,14 @@ DASHBOARD_PAGER_SCRIPT = """
       try {
         window.localStorage.setItem("trade-tracker-active-page-v1", targetKey);
       } catch (error) {}
+      requestAnimationFrame(function() {
+        if (typeof window.balanceSummaryTableWidths === "function") {
+          window.balanceSummaryTableWidths();
+        }
+        window.dispatchEvent(new CustomEvent("trade-tracker-dashboard-page-change", {
+          detail: { page: targetKey }
+        }));
+      });
     }
 
     function addButton(label, key) {
@@ -377,6 +385,7 @@ def render_ths_curve_top(total_pnl: str, return_rate: str) -> str:
                   <path class="eye-off" d="M10.1 6.9c.6-.1 1.2-.1 1.9-.1 5.9 0 9.2 5.2 9.2 5.2s-.9 1.4-2.5 2.8"></path>
                 </svg>
               </button>
+              <div class="ths-curve-scope-tabs" data-curve-scope-tabs aria-label="选择收益曲线范围"></div>
               <div class="ths-curve-kicker" data-curve-hero-kicker>全部盈亏</div>
               <div class="ths-curve-value {html.escape(total_class)}" data-curve-hero-value>{html.escape(total_text)}</div>
               <div class="ths-curve-rate"><span class="ths-curve-badge">账</span> <span data-curve-hero-rate-label>总资产收益率</span> <strong class="{html.escape(rate_class)}" data-curve-hero-rate>{html.escape(rate_text)}</strong></div>
@@ -399,7 +408,7 @@ def render_ths_curve_top(total_pnl: str, return_rate: str) -> str:
               </div>
             </div>
             <div class="ths-curve-legend" aria-label="收益曲线图例">
-              <span><i class="ths-dot ths-dot-me"></i>汇总</span>
+              <span><i class="ths-dot ths-dot-me"></i><span data-curve-legend-mine>汇总</span></span>
               <span class="ths-curve-benchmark-tabs" data-curve-benchmark-tabs aria-label="选择对比指数"></span>
               <button type="button" class="ths-curve-series-toggle is-active" data-curve-toggle="excess" aria-pressed="true">
                 <i class="ths-dot ths-dot-excess"></i>超额收益
@@ -411,11 +420,24 @@ def render_ths_curve_top(total_pnl: str, return_rate: str) -> str:
 def render_ths_curve_summary(return_rate: str) -> str:
     return """
             <div class="ths-curve-control-panel">
-              <div class="ths-curve-analysis-row">
-                <span class="ths-curve-row-label">收益分析</span>
-                <div class="ths-curve-metric-tabs" aria-label="收益曲线口径">
-                  <button type="button" class="ths-curve-metric is-active" data-curve-metric="return">收益率</button>
-                  <button type="button" class="ths-curve-metric" data-curve-metric="amount">盈亏金额</button>
+              <div class="ths-curve-analysis-row ths-curve-toolbar-row">
+                <span class="ths-curve-row-label">展示</span>
+                <div class="ths-curve-toolbar">
+                  <div class="ths-curve-metric-tabs" aria-label="收益曲线口径">
+                    <button type="button" class="ths-curve-metric is-active" data-curve-metric="return">收益率</button>
+                    <button type="button" class="ths-curve-metric" data-curve-metric="amount">盈亏金额</button>
+                  </div>
+                  <div class="ths-curve-chart-control">
+                    <div class="ths-curve-chart-tabs" aria-label="收益曲线图形">
+                      <button type="button" class="ths-curve-chart-mode is-active" data-curve-chart-mode="line">折线图</button>
+                      <button type="button" class="ths-curve-chart-mode" data-curve-chart-mode="candlestick">K线图</button>
+                    </div>
+                    <div class="ths-curve-candle-tabs" data-curve-candle-tabs aria-label="选择K线周期" hidden>
+                      <button type="button" class="ths-curve-candle-interval" data-curve-candle-interval="week">周K</button>
+                      <button type="button" class="ths-curve-candle-interval" data-curve-candle-interval="month">月K</button>
+                      <button type="button" class="ths-curve-candle-interval" data-curve-candle-interval="year">年K</button>
+                    </div>
+                  </div>
                 </div>
               </div>
               <div class="ths-curve-analysis-row">
@@ -423,7 +445,7 @@ def render_ths_curve_summary(return_rate: str) -> str:
                 <div class="ths-curve-assist-list" aria-label="收益曲线辅助功能">
                   <button type="button" class="ths-curve-assist" data-curve-assist="extreme" aria-pressed="false"><i></i>极值分析</button>
                   <button type="button" class="ths-curve-assist" data-curve-assist="growth" aria-pressed="false"><i></i>最大增长</button>
-                  <button type="button" class="ths-curve-assist is-active" data-curve-assist="drawdown" aria-pressed="true"><i></i>最大回撤</button>
+                  <button type="button" class="ths-curve-assist" data-curve-assist="drawdown" aria-pressed="false"><i></i>最大回撤</button>
                 </div>
               </div>
             </div>

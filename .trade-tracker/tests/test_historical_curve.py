@@ -126,6 +126,10 @@ class HistoricalCurveTests(unittest.TestCase):
         self.assertAlmostEqual(values_by_iso["2026-05-01"], 0.0)
         self.assertAlmostEqual(values_by_iso["2026-05-02"], 19.0)
         self.assertAlmostEqual(values_by_iso["2026-05-05"], 29.0)
+        points_by_iso = {point["iso"]: point for point in series["points"]}
+        self.assertAlmostEqual(points_by_iso["2026-05-01"]["market_value"], 1000.0)
+        self.assertAlmostEqual(points_by_iso["2026-05-01"]["net_flow"], 1001.0)
+        self.assertAlmostEqual(points_by_iso["2026-05-05"]["net_flow"], -1030.0)
 
     def test_performance_stock_payload_includes_open_holding_float(self):
         row = stock_row()

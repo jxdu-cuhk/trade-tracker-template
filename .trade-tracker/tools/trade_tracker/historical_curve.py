@@ -1238,11 +1238,10 @@ def point_dates_for_currency(lots: list[StockCurveLot], histories: dict[tuple[st
     return by_currency
 
 
-def principal_basis_by_currency(
+def trade_cash_flows_by_currency(
     lots: list[StockCurveLot],
     histories: dict[tuple[str, str], dict[date, float]],
     events: list[RealizedCurveEvent],
-    dates_by_currency: dict[str, set[date]],
 ) -> dict[str, dict[date, float]]:
     flows_by_currency: dict[str, dict[date, float]] = {}
     for lot in lots:
@@ -1260,7 +1259,16 @@ def principal_basis_by_currency(
     for event in events:
         flows = flows_by_currency.setdefault(event.currency, {})
         flows[event.event_date] = flows.get(event.event_date, 0.0) + event.pnl
+    return flows_by_currency
 
+
+def principal_basis_by_currency(
+    lots: list[StockCurveLot],
+    histories: dict[tuple[str, str], dict[date, float]],
+    events: list[RealizedCurveEvent],
+    dates_by_currency: dict[str, set[date]],
+) -> dict[str, dict[date, float]]:
+    flows_by_currency = trade_cash_flows_by_currency(lots, histories, events)
     basis_by_currency: dict[str, dict[date, float]] = {}
     for currency, days in dates_by_currency.items():
         flows = flows_by_currency.get(currency, {})
@@ -1296,6 +1304,7 @@ def build_historical_curve_series(core, rows: list[tuple[int, dict[int, object]]
     name_cache: dict[tuple[str, str], str] = {}
     stock_snapshots: dict[date, dict[tuple[str, str], dict[str, object]]] = {}
     dates_by_currency = point_dates_for_currency(lots, histories, events)
+    cash_flows_by_currency = trade_cash_flows_by_currency(lots, histories, events)
     principal_by_currency = principal_basis_by_currency(lots, histories, events, dates_by_currency)
     series_list: list[dict[str, object]] = []
     for currency, days in sorted(dates_by_currency.items()):
@@ -1338,6 +1347,7 @@ def build_historical_curve_series(core, rows: list[tuple[int, dict[int, object]]
                 )
             unrealized_total = 0.0
             active_capital = 0.0
+            active_market_value = 0.0
             has_active_position = False
             has_priced_position = False
             closed_on_day = any(lot.close_date == day for lot in currency_lots)
@@ -1348,6 +1358,7 @@ def build_historical_curve_series(core, rows: list[tuple[int, dict[int, object]]
                 has_active_position = True
                 active_capital += lot.capital
                 if day <= lot.open_date:
+                    active_market_value += lot.open_price * abs(lot.quantity)
                     continue
                 history = histories.get((lot.ticker, lot.currency), {})
                 price = mark_price_for_curve_day(lot, day, history, current_prices)
@@ -1356,6 +1367,8 @@ def build_historical_curve_series(core, rows: list[tuple[int, dict[int, object]]
                 has_priced_position = True
                 if day < date.today() or (lot.ticker, lot.currency) not in current_prices:
                     price = history_price_on_trade_scale(lot, price, history)
+                market_value = price * abs(lot.quantity)
+                active_market_value += market_value
                 floating = unrealized_pnl(lot, price)
                 unrealized_total += floating
                 add_stock_snapshot_value(
@@ -1366,7 +1379,7 @@ def build_historical_curve_series(core, rows: list[tuple[int, dict[int, object]]
                     currency_raw=lot.currency_raw,
                     amount=floating,
                     capital=lot.capital,
-                    market_value=price * abs(lot.quantity),
+                    market_value=market_value,
                 )
             if not has_active_position and not has_priced_position and not closed_on_day and not event_on_day:
                 continue
@@ -1386,6 +1399,11 @@ def build_historical_curve_series(core, rows: list[tuple[int, dict[int, object]]
                 point["capital"] = active_capital
             elif closed_on_day:
                 point["capital"] = 0.0
+            if active_market_value > EPSILON:
+                point["market_value"] = active_market_value
+            trade_cash_flow = cash_flows_by_currency.get(currency, {}).get(day, 0.0)
+            if abs(trade_cash_flow) > EPSILON:
+                point["net_flow"] = -trade_cash_flow
             principal = principal_by_currency.get(currency, {}).get(day)
             if principal is not None and principal > EPSILON:
                 point["principal"] = principal

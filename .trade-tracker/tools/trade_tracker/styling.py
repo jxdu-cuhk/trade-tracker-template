@@ -259,23 +259,31 @@ def compact_preview_table_spacing(output_dir: Path) -> None:
 
 .holdings-account-grid {{
   display: grid;
-  grid-template-columns: repeat(4, minmax(0, 1fr)) minmax(150px, 1.2fr);
+  grid-template-columns: repeat(12, minmax(0, 1fr));
+  gap: 1px;
+  background: #f0f2f4;
 }}
 
 .holdings-account-metric {{
   display: grid;
   gap: 6px;
+  min-width: 0;
   min-height: 88px;
   align-content: center;
   padding: 13px 16px;
-  border-right: 1px solid #f0f2f4;
+  background: #ffffff;
 }}
 
-.holdings-account-metric:last-child {{
-  border-right: 0;
+.holdings-account-stat {{
+  grid-column: span 2;
+}}
+
+.holdings-account-trend {{
+  grid-column: span 3;
 }}
 
 .holdings-month-metric {{
+  container-type: inline-size;
   gap: 5px;
   align-content: stretch;
 }}
@@ -285,6 +293,7 @@ def compact_preview_table_spacing(output_dir: Path) -> None:
   color: #9aa0a6;
   font-size: 12px;
   font-weight: 800;
+  white-space: nowrap;
 }}
 
 .holdings-account-value {{
@@ -303,6 +312,7 @@ def compact_preview_table_spacing(output_dir: Path) -> None:
 
 .holdings-realized-head {{
   display: flex;
+  flex-wrap: wrap;
   align-items: center;
   justify-content: space-between;
   gap: 8px;
@@ -311,6 +321,7 @@ def compact_preview_table_spacing(output_dir: Path) -> None:
 .holdings-range-tabs {{
   display: inline-flex;
   flex: 0 0 auto;
+  flex-wrap: wrap;
   gap: 2px;
   padding: 2px;
   border-radius: 999px;
@@ -339,7 +350,7 @@ def compact_preview_table_spacing(output_dir: Path) -> None:
 
 .holdings-realized-range {{
   display: none;
-  grid-template-columns: minmax(0, 0.84fr) minmax(110px, 1fr);
+  grid-template-columns: minmax(0, 0.78fr) minmax(96px, 1fr);
   align-items: end;
   gap: 10px;
 }}
@@ -366,7 +377,29 @@ def compact_preview_table_spacing(output_dir: Path) -> None:
   width: 100%;
   max-width: 156px;
   min-width: 0;
+  justify-self: end;
   overflow: visible;
+}}
+
+@container (max-width: 250px) {{
+  .holdings-realized-head {{
+    align-items: flex-start;
+    justify-content: flex-start;
+  }}
+
+  .holdings-range-tabs {{
+    justify-content: flex-start;
+  }}
+
+  .holdings-realized-range {{
+    grid-template-columns: 1fr;
+    align-items: stretch;
+  }}
+
+  .holdings-month-sparkline {{
+    max-width: none;
+    justify-self: stretch;
+  }}
 }}
 
 .holdings-sparkline-axis {{
@@ -417,6 +450,60 @@ details[data-ths-return-curve] .ths-curve-hero {{
   background: linear-gradient(180deg, #f72f3a 0%, #ff5a10 100%);
   color: #ffffff;
   padding: 22px 18px 0;
+}}
+
+details[data-ths-return-curve] .ths-curve-hero .ths-curve-scope-tabs {{
+  position: absolute;
+  top: 14px;
+  left: 16px;
+  z-index: 2;
+  display: inline-flex;
+  max-width: min(340px, calc(50% - 108px));
+  flex-wrap: wrap;
+  gap: 3px;
+  align-items: center;
+  border: 1px solid rgba(255, 255, 255, 0.28);
+  border-radius: 999px;
+  background: rgba(255, 255, 255, 0.14);
+  padding: 3px;
+  backdrop-filter: blur(10px);
+}}
+
+details[data-ths-return-curve] .ths-curve-scope-tabs[hidden] {{
+  display: none;
+}}
+
+details[data-ths-return-curve] .ths-curve-hero .ths-curve-scope {{
+  appearance: none;
+  min-height: 28px;
+  border: 0;
+  border-radius: 999px;
+  background: transparent;
+  color: rgba(255, 255, 255, 0.88);
+  cursor: pointer;
+  font: inherit;
+  font-size: 12px;
+  font-weight: 900;
+  line-height: 1;
+  padding: 0 12px;
+  white-space: nowrap;
+}}
+
+details[data-ths-return-curve] .ths-curve-hero .ths-curve-scope:hover,
+details[data-ths-return-curve] .ths-curve-hero .ths-curve-scope:focus-visible {{
+  background: rgba(255, 255, 255, 0.16);
+  color: #ffffff;
+}}
+
+details[data-ths-return-curve] .ths-curve-hero .ths-curve-scope:focus-visible {{
+  outline: 2px solid rgba(255, 255, 255, 0.82);
+  outline-offset: 2px;
+}}
+
+details[data-ths-return-curve] .ths-curve-hero .ths-curve-scope.is-active {{
+  background: #ffffff;
+  color: #ff2f45;
+  box-shadow: 0 6px 14px rgba(130, 22, 32, 0.16);
 }}
 
 details[data-ths-return-curve] .ths-curve-privacy-toggle {{
@@ -727,7 +814,7 @@ details[data-ths-return-curve] .ths-curve-series-toggle:not(.is-active) {{
 }}
 
 details[data-ths-return-curve] .ths-curve-series-toggle:focus-visible {{
-  outline: 2px solid rgba(255, 159, 26, 0.28);
+  outline: 2px solid rgba(139, 92, 246, 0.28);
   outline-offset: 4px;
   border-radius: 4px;
 }}
@@ -747,7 +834,7 @@ details[data-ths-return-curve] .ths-dot-base {{
 }}
 
 details[data-ths-return-curve] .ths-dot-excess {{
-  background: #ff9f1a;
+  background: #8b5cf6;
 }}
 
 details[data-ths-return-curve] .ths-curve-series-toggle:not(.is-active) .ths-dot-excess {{
@@ -848,30 +935,73 @@ details[data-ths-return-curve] .curve-benchmark-line {{
 
 details[data-ths-return-curve] .curve-excess-line {{
   fill: none;
-  stroke-width: 1.25px;
+  stroke-width: 1.35px;
   stroke-linecap: round;
   stroke-linejoin: round;
-  stroke-dasharray: 5 3;
-  stroke: #ff9f1a;
+  stroke-dasharray: 6 3;
+  stroke: #8b5cf6;
 }}
 
 details[data-ths-return-curve] .curve-line {{
   stroke-width: 1.45px;
 }}
 
+details[data-ths-return-curve] .curve-candles {{
+  pointer-events: none;
+}}
+
+details[data-ths-return-curve] .curve-candle-wick {{
+  stroke-linecap: square;
+  stroke-width: 1.1px;
+  vector-effect: non-scaling-stroke;
+}}
+
+details[data-ths-return-curve] .curve-candle-body {{
+  shape-rendering: crispEdges;
+  stroke-width: 1.15px;
+  vector-effect: non-scaling-stroke;
+}}
+
+details[data-ths-return-curve] .curve-candle-wick.curve-candle-up,
+details[data-ths-return-curve] .curve-candle-body.curve-candle-up {{
+  stroke: #ff2f45;
+}}
+
+details[data-ths-return-curve] .curve-candle-body.curve-candle-up {{
+  fill: #ffffff;
+}}
+
+details[data-ths-return-curve] .curve-candle-wick.curve-candle-down,
+details[data-ths-return-curve] .curve-candle-body.curve-candle-down {{
+  stroke: #137333;
+}}
+
+details[data-ths-return-curve] .curve-candle-body.curve-candle-down {{
+  fill: #137333;
+}}
+
+details[data-ths-return-curve] .curve-candle-wick.curve-candle-flat,
+details[data-ths-return-curve] .curve-candle-body.curve-candle-flat {{
+  stroke: #5f6368;
+}}
+
+details[data-ths-return-curve] .curve-candle-body.curve-candle-flat {{
+  fill: #ffffff;
+}}
+
 details[data-ths-return-curve] .curve-drawdown-band {{
-  fill: rgba(255, 143, 15, 0.08);
+  fill: rgba(0, 166, 118, 0.08);
   pointer-events: none;
 }}
 
 details[data-ths-return-curve] .curve-growth-band {{
-  fill: rgba(255, 77, 79, 0.07);
+  fill: rgba(245, 158, 11, 0.09);
   pointer-events: none;
 }}
 
 details[data-ths-return-curve] .curve-drawdown-link {{
   fill: none;
-  stroke: rgba(255, 143, 15, 0.9);
+  stroke: rgba(0, 166, 118, 0.92);
   stroke-width: 1.25px;
   stroke-dasharray: 4 3;
   stroke-linecap: round;
@@ -880,7 +1010,7 @@ details[data-ths-return-curve] .curve-drawdown-link {{
 
 details[data-ths-return-curve] .curve-growth-link {{
   fill: none;
-  stroke: rgba(255, 77, 79, 0.9);
+  stroke: rgba(245, 158, 11, 0.92);
   stroke-width: 1.25px;
   stroke-dasharray: 4 3;
   stroke-linecap: round;
@@ -889,7 +1019,7 @@ details[data-ths-return-curve] .curve-growth-link {{
 
 details[data-ths-return-curve] .curve-drawdown-marker {{
   fill: #ffffff;
-  stroke: #ff9f1a;
+  stroke: #00a676;
   stroke-width: 1.5px;
   opacity: 0.9;
   pointer-events: none;
@@ -897,14 +1027,14 @@ details[data-ths-return-curve] .curve-drawdown-marker {{
 
 details[data-ths-return-curve] .curve-growth-marker {{
   fill: #ffffff;
-  stroke: #ff4d4f;
+  stroke: #f59e0b;
   stroke-width: 1.5px;
   opacity: 0.9;
   pointer-events: none;
 }}
 
 details[data-ths-return-curve] .curve-drawdown-label {{
-  fill: #ff9f1a;
+  fill: #007f5f;
   font-size: 12px;
   font-weight: 900;
   paint-order: stroke;
@@ -915,7 +1045,7 @@ details[data-ths-return-curve] .curve-drawdown-label {{
 }}
 
 details[data-ths-return-curve] .curve-growth-label {{
-  fill: #ff4d4f;
+  fill: #b45309;
   font-size: 12px;
   font-weight: 900;
   paint-order: stroke;
@@ -930,14 +1060,14 @@ details[data-ths-return-curve] .curve-extreme-layer {{
 }}
 
 details[data-ths-return-curve] .curve-extreme-line {{
-  stroke: #ff9f1a;
+  stroke: #5f6368;
   stroke-width: 1.1px;
-  stroke-dasharray: 5 4;
+  stroke-dasharray: 2 5;
   opacity: 0.95;
 }}
 
 details[data-ths-return-curve] .curve-extreme-label {{
-  fill: #ff9f1a;
+  fill: #3c4043;
   font-size: 12px;
   font-weight: 900;
   paint-order: stroke;
@@ -964,12 +1094,20 @@ details[data-ths-return-curve] .curve-benchmark-dot {{
 }}
 
 details[data-ths-return-curve] .curve-excess-dot {{
-  fill: #ff9f1a;
+  fill: #8b5cf6;
 }}
 
 details[data-ths-return-curve] .curve-hover-capture {{
   fill: transparent;
   pointer-events: all;
+}}
+
+details[data-ths-return-curve] .curve-card[data-curve-chart-mode="candlestick"] .curve-hover-capture {{
+  cursor: grab;
+}}
+
+details[data-ths-return-curve] .curve-card.is-kline-dragging .curve-hover-capture {{
+  cursor: grabbing;
 }}
 
 details[data-ths-return-curve] .curve-hover-layer {{
@@ -997,7 +1135,7 @@ details[data-ths-return-curve] .curve-hover-dot-base {{
 }}
 
 details[data-ths-return-curve] .curve-hover-dot-excess {{
-  stroke: #ff9f1a;
+  stroke: #8b5cf6;
 }}
 
 details[data-ths-return-curve] .curve-tooltip {{
@@ -1090,18 +1228,27 @@ details[data-ths-return-curve] .curve-risk-caption strong {{
 
 details[data-ths-return-curve] .ths-curve-control-panel {{
   display: grid;
-  gap: 12px;
+  gap: 8px;
   border: 1px solid #edf0f2;
   border-top: 0;
   background: #ffffff;
-  padding: 6px 18px 18px;
+  padding: 10px 18px 14px;
 }}
 
 details[data-ths-return-curve] .ths-curve-analysis-row {{
   display: grid;
   grid-template-columns: 92px minmax(0, 1fr);
   align-items: center;
-  gap: 12px;
+  gap: 10px;
+}}
+
+details[data-ths-return-curve] .ths-curve-toolbar {{
+  display: flex;
+  min-width: 0;
+  flex-wrap: wrap;
+  align-items: center;
+  justify-content: center;
+  gap: 8px 10px;
 }}
 
 details[data-ths-return-curve] .ths-curve-row-label {{
@@ -1110,9 +1257,11 @@ details[data-ths-return-curve] .ths-curve-row-label {{
   font-weight: 800;
 }}
 
-details[data-ths-return-curve] .ths-curve-metric-tabs {{
+details[data-ths-return-curve] .ths-curve-metric-tabs,
+details[data-ths-return-curve] .ths-curve-chart-tabs,
+details[data-ths-return-curve] .ths-curve-candle-tabs {{
   display: inline-flex;
-  justify-self: center;
+  align-items: center;
   gap: 2px;
   margin: 0;
   padding: 3px;
@@ -1120,7 +1269,23 @@ details[data-ths-return-curve] .ths-curve-metric-tabs {{
   background: #f3f5f6;
 }}
 
-details[data-ths-return-curve] .ths-curve-metric {{
+details[data-ths-return-curve] .ths-curve-chart-control {{
+  display: inline-flex;
+  align-items: center;
+  gap: 8px;
+}}
+
+details[data-ths-return-curve] .ths-curve-candle-tabs {{
+  background: #f7f0ff;
+}}
+
+details[data-ths-return-curve] .ths-curve-candle-tabs[hidden] {{
+  display: none;
+}}
+
+details[data-ths-return-curve] .ths-curve-metric,
+details[data-ths-return-curve] .ths-curve-chart-mode,
+details[data-ths-return-curve] .ths-curve-candle-interval {{
   appearance: none;
   border: 0;
   border-radius: 7px;
@@ -1131,12 +1296,18 @@ details[data-ths-return-curve] .ths-curve-metric {{
   font-size: 13px;
   font-weight: 800;
   line-height: 1;
-  padding: 8px 18px;
+  padding: 7px 15px;
   white-space: nowrap;
 }}
 
-details[data-ths-return-curve] .ths-curve-metric.is-active {{
+details[data-ths-return-curve] .ths-curve-metric.is-active,
+details[data-ths-return-curve] .ths-curve-chart-mode.is-active {{
   background: #ff2f45;
+  color: #ffffff;
+}}
+
+details[data-ths-return-curve] .ths-curve-candle-interval.is-active {{
+  background: #8b5cf6;
   color: #ffffff;
 }}
 
@@ -1199,8 +1370,48 @@ details[data-ths-return-curve] [data-curve-end-label] {{
 }}
 
 details[data-ths-return-curve] .curve-y-label {{
-  fill: #9aa0a6;
-  font-weight: 700;
+  font-size: 11px;
+  font-weight: 850;
+  paint-order: stroke;
+  stroke: rgba(255, 255, 255, 0.92);
+  stroke-linejoin: round;
+  stroke-width: 2.4px;
+}}
+
+details[data-ths-return-curve] .curve-y-label-positive {{
+  fill: #ff2f45;
+}}
+
+details[data-ths-return-curve] .curve-y-label-negative {{
+  fill: #137333;
+}}
+
+details[data-ths-return-curve] .curve-y-label-zero {{
+  fill: #202124;
+}}
+
+details[data-ths-return-curve] .curve-number-positive {{
+  fill: #ff2f45;
+}}
+
+details[data-ths-return-curve] .curve-number-negative {{
+  fill: #137333;
+}}
+
+details[data-ths-return-curve] .curve-number-zero {{
+  fill: #202124;
+}}
+
+details[data-ths-return-curve] .curve-tooltip strong.value-positive {{
+  color: #ff2f45;
+}}
+
+details[data-ths-return-curve] .curve-tooltip strong.value-negative {{
+  color: #137333;
+}}
+
+details[data-ths-return-curve] .curve-tooltip strong.value-zero {{
+  color: #202124;
 }}
 
 details[data-ths-return-curve] .curve-end-value {{
@@ -2185,19 +2396,13 @@ details[data-ths-return-curve] .ths-curve-bars div:nth-child(2) strong {{
   .metric-card-muted {{
     grid-column: span 6;
   }}
-}}
 
-@media (max-width: 980px) {{
-  .holdings-account-grid {{
-    grid-template-columns: repeat(2, minmax(0, 1fr));
+  .holdings-account-stat {{
+    grid-column: span 4;
   }}
 
-  .holdings-account-metric:nth-child(2n) {{
-    border-right: 0;
-  }}
-
-  .holdings-account-metric:nth-child(n + 3) {{
-    border-top: 1px solid #f0f2f4;
+  .holdings-account-trend {{
+    grid-column: span 6;
   }}
 }}
 
@@ -2211,18 +2416,17 @@ details[data-ths-return-curve] .ths-curve-bars div:nth-child(2) strong {{
   }}
 
   .holdings-account-grid {{
-    grid-template-columns: 1fr;
+    grid-template-columns: repeat(12, minmax(0, 1fr));
+  }}
+
+  .holdings-account-stat,
+  .holdings-account-trend {{
+    grid-column: span 12;
   }}
 
   .holdings-account-metric {{
     min-height: 0;
-    border-right: 0;
-    border-top: 1px solid #f0f2f4;
     padding: 13px 14px;
-  }}
-
-  .holdings-account-metric:first-child {{
-    border-top: 0;
   }}
 
   .holdings-account-value {{
@@ -2284,6 +2488,17 @@ details[data-ths-return-curve] .ths-curve-bars div:nth-child(2) strong {{
     height: 32px;
   }}
 
+  details[data-ths-return-curve] .ths-curve-hero .ths-curve-scope-tabs {{
+    position: static;
+    max-width: 100%;
+    justify-self: stretch;
+    margin-right: 42px;
+  }}
+
+  details[data-ths-return-curve] .ths-curve-hero .ths-curve-scope {{
+    flex: 1 1 auto;
+  }}
+
   details[data-ths-return-curve] .ths-curve-tabs {{
     grid-template-columns: repeat(3, minmax(0, 1fr));
     font-size: 12px;
@@ -2320,11 +2535,26 @@ details[data-ths-return-curve] .ths-curve-bars div:nth-child(2) strong {{
     gap: 8px;
   }}
 
-  details[data-ths-return-curve] .ths-curve-metric-tabs {{
+  details[data-ths-return-curve] .ths-curve-toolbar {{
+    width: 100%;
+    justify-content: stretch;
+  }}
+
+  details[data-ths-return-curve] .ths-curve-metric-tabs,
+  details[data-ths-return-curve] .ths-curve-chart-tabs,
+  details[data-ths-return-curve] .ths-curve-candle-tabs {{
     width: 100%;
   }}
 
-  details[data-ths-return-curve] .ths-curve-metric {{
+  details[data-ths-return-curve] .ths-curve-chart-control {{
+    width: 100%;
+    flex-wrap: wrap;
+    align-items: stretch;
+  }}
+
+  details[data-ths-return-curve] .ths-curve-metric,
+  details[data-ths-return-curve] .ths-curve-chart-mode,
+  details[data-ths-return-curve] .ths-curve-candle-interval {{
     flex: 1;
   }}
 
@@ -2387,6 +2617,30 @@ details[data-ths-return-curve] .ths-curve-bars div:nth-child(2) strong {{
 
 .summary-table thead th {{
   padding-right: 14px;
+}}
+
+.summary-scrollbar-top {{
+  overflow-x: auto;
+  overflow-y: hidden;
+  height: 14px;
+  margin: 0 0 4px;
+  border: 1px solid #e5ece7;
+  border-bottom: 0;
+  border-radius: 12px 12px 0 0;
+  background: #ffffff;
+}}
+
+.summary-scrollbar-top[hidden] {{
+  display: none;
+}}
+
+.summary-scrollbar-spacer {{
+  height: 1px;
+}}
+
+.summary-scrollbar-top + .summary-wrap {{
+  border-top-left-radius: 8px;
+  border-top-right-radius: 8px;
 }}
 
 .summary-wrap .summary-table {{

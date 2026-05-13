@@ -1136,25 +1136,71 @@ def add_balanced_summary_table_script(html_text: str) -> str:
           replaceSummaryFooterRows(table, headerLabels, rowsByCurrency, statsByCurrency);
         }
 
-        function balanceSummaryTableWidths() {
-          document.querySelectorAll('.summary-wrap').forEach((wrap) => {
-            const table = wrap.querySelector('.summary-table');
-            if (!table) return;
-            table.classList.remove('fit-width');
-            table.style.removeProperty('width');
-            const naturalWidth = table.scrollWidth;
-            const availableWidth = wrap.clientWidth;
-            if (naturalWidth > 0 && naturalWidth <= availableWidth + 1) {
-              table.classList.add('fit-width');
-            }
-          });
-        }
+	        function balanceSummaryTableWidths() {
+	          document.querySelectorAll('.summary-wrap').forEach((wrap) => {
+	            const table = wrap.querySelector('.summary-table');
+	            if (!table) return;
+	            table.classList.remove('fit-width');
+	            table.style.removeProperty('width');
+	            const naturalWidth = table.scrollWidth;
+	            const availableWidth = wrap.clientWidth;
+	            if (naturalWidth > 0 && naturalWidth <= availableWidth + 1) {
+	              table.classList.add('fit-width');
+	            }
+	            syncSummaryTopScrollbar(wrap);
+	          });
+	        }
+
+	        function summaryTopScrollbarFor(wrap) {
+	          let scrollbar = wrap.previousElementSibling;
+	          if (!scrollbar || !scrollbar.classList.contains('summary-scrollbar-top')) {
+	            scrollbar = document.createElement('div');
+	            scrollbar.className = 'summary-scrollbar-top';
+	            scrollbar.setAttribute('aria-hidden', 'true');
+	            const spacer = document.createElement('div');
+	            spacer.className = 'summary-scrollbar-spacer';
+	            scrollbar.appendChild(spacer);
+	            wrap.parentNode.insertBefore(scrollbar, wrap);
+	          }
+	          if (scrollbar.dataset.scrollSyncBound !== '1') {
+	            let syncing = false;
+	            scrollbar.addEventListener('scroll', () => {
+	              if (syncing) return;
+	              syncing = true;
+	              wrap.scrollLeft = scrollbar.scrollLeft;
+	              syncing = false;
+	            });
+	            wrap.addEventListener('scroll', () => {
+	              if (syncing) return;
+	              syncing = true;
+	              scrollbar.scrollLeft = wrap.scrollLeft;
+	              syncing = false;
+	            });
+	            scrollbar.dataset.scrollSyncBound = '1';
+	          }
+	          return scrollbar;
+	        }
+
+	        function syncSummaryTopScrollbar(wrap) {
+	          const table = wrap.querySelector('.summary-table');
+	          if (!table || !wrap.parentNode) return;
+	          const scrollbar = summaryTopScrollbarFor(wrap);
+	          const spacer = scrollbar.querySelector('.summary-scrollbar-spacer');
+	          const scrollWidth = Math.max(table.scrollWidth, wrap.scrollWidth);
+	          const hasOverflow = scrollWidth > wrap.clientWidth + 1;
+	          scrollbar.hidden = !hasOverflow;
+	          if (spacer) spacer.style.width = `${scrollWidth}px`;
+	          scrollbar.scrollLeft = wrap.scrollLeft;
+	        }
 
         function refreshSummaryTablesAndWidths() {
           if (typeof updateSummaryTables === 'function') updateSummaryTables();
           applyAllSummaryTableTones();
           requestAnimationFrame(balanceSummaryTableWidths);
         }
+
+        window.balanceSummaryTableWidths = balanceSummaryTableWidths;
+        window.refreshSummaryTablesAndWidths = refreshSummaryTablesAndWidths;
 
         function shouldToneSummaryLabel(label) {
           const normalized = String(label || '').trim();
@@ -1210,6 +1256,9 @@ def add_balanced_summary_table_script(html_text: str) -> str:
 
         window.addEventListener('load', refreshSummaryTablesAndWidths);
         window.addEventListener('resize', balanceSummaryTableWidths);
+        window.addEventListener('trade-tracker-dashboard-page-change', () => {
+          requestAnimationFrame(balanceSummaryTableWidths);
+        });
         document.addEventListener('DOMContentLoaded', () => {
           refineAnnualYearFilter();
           refreshSummaryTablesAndWidths();
