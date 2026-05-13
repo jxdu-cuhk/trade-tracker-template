@@ -405,7 +405,7 @@ def render_ths_curve_top(total_pnl: str, return_rate: str) -> str:
               <div class="ths-curve-value {html.escape(total_class)}" data-curve-hero-value>{html.escape(total_text)}</div>
               <div class="ths-curve-rate"><span class="ths-curve-badge">账</span> <span data-curve-hero-rate-label>总资产收益率</span> <strong class="{html.escape(rate_class)}" data-curve-hero-rate>{html.escape(rate_text)}</strong></div>
               <div class="ths-curve-compare-pill" data-curve-compare-pill hidden>
-                <span>同期上证 <strong data-curve-compare-benchmark>--</strong></span>
+                <span><span data-curve-compare-label>同期上证指数</span> <strong data-curve-compare-benchmark>--</strong></span>
                 <span>跑赢指数 <strong data-curve-compare-excess>--</strong></span>
               </div>
               <div class="ths-curve-tabs" aria-label="收益曲线时间范围">
@@ -424,7 +424,7 @@ def render_ths_curve_top(total_pnl: str, return_rate: str) -> str:
             </div>
             <div class="ths-curve-legend" aria-label="收益曲线图例">
               <span><i class="ths-dot ths-dot-me"></i>汇总</span>
-              <span><i class="ths-dot ths-dot-base"></i>上证指数</span>
+              <span class="ths-curve-benchmark-tabs" data-curve-benchmark-tabs aria-label="选择对比指数"></span>
             </div>
 """
 
@@ -482,7 +482,7 @@ def apply_tonghuashun_curve_style(html_text: str) -> str:
     )
     section = re.sub(
         r'<p class="section-note">.*?</p>',
-        '<p class="section-note">红线为历史每天的总盈亏：截至当天已实现盈亏 + 当天仍持仓的收盘浮盈/浮亏；收益率用截至当日历史最高持仓本金近似总资产基准，避免清仓换仓时分母突然变小。港币和美元按当前汇率折成人民币后合并展示，蓝线对比上证指数。</p>',
+        '<p class="section-note">红线为历史每天的总盈亏：截至当天已实现盈亏 + 当天仍持仓的收盘浮盈/浮亏；收益率用截至当日历史最高持仓本金近似总资产基准，避免清仓换仓时分母突然变小。港币和美元按当前汇率折成人民币后合并展示，蓝线可切换对比 A 股、港股和美股主要指数。</p>',
         section,
         count=1,
         flags=re.S,

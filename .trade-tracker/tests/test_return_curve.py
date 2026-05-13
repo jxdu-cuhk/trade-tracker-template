@@ -19,6 +19,33 @@ from trade_tracker.return_curve import combine_series_to_cny, curve_payload, ren
 
 
 class ReturnCurveTests(unittest.TestCase):
+    def test_benchmark_catalog_has_expected_unique_indices(self):
+        labels = [item["label"] for item in return_curve_module.BENCHMARKS]
+        ids = [item["id"] for item in return_curve_module.BENCHMARKS]
+        sources = [item.get("secid") or item.get("tencent") or item.get("yahoo") for item in return_curve_module.BENCHMARKS]
+
+        self.assertEqual(len(labels), len(set(labels)))
+        self.assertEqual(len(ids), len(set(ids)))
+        self.assertEqual(len(sources), len(set(sources)))
+        for label in [
+            "上证指数",
+            "深证成指",
+            "创业板指",
+            "上证50",
+            "沪深300",
+            "中证500",
+            "科创综指",
+            "科创50",
+            "恒生指数",
+            "恒生科技",
+            "国企指数",
+            "标普500",
+            "纳斯达克",
+            "道琼斯",
+            "罗素2000",
+        ]:
+            self.assertIn(label, labels)
+
     def test_combine_series_to_cny_merges_currency_points(self):
         with patch("trade_tracker.return_curve.current_fx_rates_to_cny", return_value={"人民币": 1.0, "港币": 0.9, "美元": 7.2}):
             series = combine_series_to_cny(
@@ -93,6 +120,14 @@ class ReturnCurveTests(unittest.TestCase):
         self.assertIn("data-ths-curve-grid", html)
         self.assertIn("data-return-curve-card", html)
         self.assertIn("curve-benchmark-line", html)
+        self.assertIn("data-curve-benchmark-tabs", html)
+        self.assertIn("ths-curve-benchmark", html)
+        self.assertIn("selectedBenchmarkFor", html)
+        self.assertIn("上证50", html)
+        self.assertIn("科创综指", html)
+        self.assertIn("科创50", html)
+        self.assertIn("恒生指数", html)
+        self.assertIn("标普500", html)
         self.assertIn("range === 'three-year'", html)
         self.assertIn("capitalForPoint(point)", html)
         self.assertIn("serialFromIso", html)
@@ -160,6 +195,12 @@ class ReturnCurveTests(unittest.TestCase):
         self.assertEqual(payload[0]["currency"], "人民币折算")
         self.assertEqual(payload[0]["points"][0]["iso"], "2026-05-07")
         self.assertEqual(payload[0]["benchmark"]["label"], "上证指数")
+        self.assertEqual(payload[0]["benchmarks"][3]["label"], "上证50")
+        self.assertEqual(payload[0]["benchmarks"][6]["label"], "科创综指")
+        self.assertEqual(payload[0]["benchmarks"][7]["label"], "科创50")
+        self.assertEqual(payload[0]["benchmarks"][8]["market"], "港股")
+        self.assertEqual(payload[0]["benchmarks"][11]["label"], "标普500")
+        self.assertEqual(payload[0]["benchmarks"][11]["shortLabel"], "标普500")
         self.assertEqual(payload[0]["benchmark"]["points"][0]["close"], 100)
 
     def test_fetch_benchmark_points_uses_fresh_local_cache(self):
@@ -202,6 +243,20 @@ class ReturnCurveTests(unittest.TestCase):
 
         self.assertEqual(points, tencent_points)
         fetch_tencent.assert_called_once_with("sh000001", "2026-05-01", "2026-05-07")
+        fetch_eastmoney.assert_not_called()
+
+    def test_fetch_benchmark_points_online_uses_yahoo_for_us_index(self):
+        yahoo_points = [{"date": "2026/05/07", "iso": "2026-05-07", "serial": 46149, "close": 5100.5}]
+        with (
+            patch.object(return_curve_module, "fetch_tencent_benchmark_points", return_value=[]) as fetch_tencent,
+            patch.object(return_curve_module, "fetch_yahoo_benchmark_points", return_value=yahoo_points) as fetch_yahoo,
+            patch.object(return_curve_module, "fetch_eastmoney_benchmark_points", return_value=[]) as fetch_eastmoney,
+        ):
+            points = return_curve_module.fetch_benchmark_points_online("sp500", "2026-05-01", "2026-05-07")
+
+        self.assertEqual(points, yahoo_points)
+        fetch_tencent.assert_called_once_with("", "2026-05-01", "2026-05-07")
+        fetch_yahoo.assert_called_once_with("^GSPC", "2026-05-01", "2026-05-07")
         fetch_eastmoney.assert_not_called()
 
 

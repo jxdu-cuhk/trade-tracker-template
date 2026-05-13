@@ -3,19 +3,37 @@ from __future__ import annotations
 import html
 import json
 import re
+from concurrent.futures import ThreadPoolExecutor, as_completed
 from datetime import date
 from urllib.error import URLError
 from urllib.parse import urlencode
 from urllib.request import Request, urlopen
 
-from .historical_curve import fetch_tencent_history_points
+from .historical_curve import SecurityHistoryPoint, fetch_tencent_history_points, fetch_yahoo_history_points
 from .market_data import current_fx_rates_to_cny
 from .runtime import APP_DIR
 from .utils import clean_text, parse_float
 
 COMBINED_CURRENCY = "人民币折算"
 COMBINED_CODE = "CNY"
-COMBINED_BENCHMARK = {"label": "上证指数", "secid": "1.000001", "tencent": "sh000001"}
+BENCHMARKS = [
+    {"id": "sse", "market": "A股", "label": "上证指数", "short_label": "上证", "secid": "1.000001", "tencent": "sh000001"},
+    {"id": "szse", "market": "A股", "label": "深证成指", "short_label": "深证", "secid": "0.399001", "tencent": "sz399001"},
+    {"id": "chinext", "market": "A股", "label": "创业板指", "short_label": "创业板", "secid": "0.399006", "tencent": "sz399006"},
+    {"id": "sse50", "market": "A股", "label": "上证50", "short_label": "上证50", "secid": "1.000016", "tencent": "sh000016"},
+    {"id": "csi300", "market": "A股", "label": "沪深300", "short_label": "沪深300", "secid": "1.000300", "tencent": "sh000300"},
+    {"id": "csi500", "market": "A股", "label": "中证500", "short_label": "中证500", "secid": "1.000905", "tencent": "sh000905"},
+    {"id": "star", "market": "A股", "label": "科创综指", "short_label": "科创综指", "secid": "1.000680", "tencent": "sh000680"},
+    {"id": "star50", "market": "A股", "label": "科创50", "short_label": "科创50", "secid": "1.000688", "tencent": "sh000688"},
+    {"id": "hsi", "market": "港股", "label": "恒生指数", "short_label": "恒指", "tencent": "hkHSI", "yahoo": "^HSI"},
+    {"id": "hstech", "market": "港股", "label": "恒生科技", "short_label": "恒科", "tencent": "hkHSTECH"},
+    {"id": "hscei", "market": "港股", "label": "国企指数", "short_label": "国企", "tencent": "hkHSCEI", "yahoo": "^HSCE"},
+    {"id": "sp500", "market": "美股", "label": "标普500", "short_label": "标普500", "yahoo": "^GSPC"},
+    {"id": "nasdaq", "market": "美股", "label": "纳斯达克", "short_label": "纳指", "yahoo": "^IXIC"},
+    {"id": "dow", "market": "美股", "label": "道琼斯", "short_label": "道指", "yahoo": "^DJI"},
+    {"id": "russell2000", "market": "美股", "label": "罗素2000", "short_label": "罗素", "yahoo": "^RUT"},
+]
+COMBINED_BENCHMARK = BENCHMARKS[0]
 BENCHMARK_TIMEOUT = 8
 BENCHMARK_CACHE_PATH = APP_DIR / "tools" / "cache" / "benchmark_history.json"
 BENCHMARK_CACHE_TTL_DAYS = 7
@@ -85,14 +103,63 @@ def is_cache_entry_fresh(entry: object) -> bool:
     return (date.today() - fetched_at).days <= BENCHMARK_CACHE_TTL_DAYS
 
 
+def benchmark_definition(identifier: object) -> dict[str, object]:
+    if isinstance(identifier, dict):
+        return dict(identifier)
+    text = clean_text(identifier)
+    for benchmark in BENCHMARKS:
+        aliases = {
+            clean_text(benchmark.get("id")),
+            clean_text(benchmark.get("secid")),
+            clean_text(benchmark.get("tencent")),
+            clean_text(benchmark.get("yahoo")),
+        }
+        if text and text in aliases:
+            return dict(benchmark)
+    return {"id": text, "label": text or "市场基准", "secid": text}
+
+
+def benchmark_cache_identifier(benchmark: dict[str, object]) -> str:
+    return (
+        clean_text(benchmark.get("cache_key"))
+        or clean_text(benchmark.get("secid"))
+        or clean_text(benchmark.get("yahoo"))
+        or clean_text(benchmark.get("tencent"))
+        or clean_text(benchmark.get("id"))
+    )
+
+
+def history_points_to_benchmark_points(points: list[SecurityHistoryPoint]) -> list[dict[str, object]]:
+    converted = []
+    for point in points:
+        serial = excel_serial_from_iso(point.iso)
+        if serial is None:
+            continue
+        converted.append(
+            {
+                "date": date_label_from_iso(point.iso),
+                "iso": point.iso,
+                "serial": serial,
+                "close": point.close,
+            }
+        )
+    return converted
+
+
 def benchmark_tencent_symbol(secid: str) -> str:
-    if secid == COMBINED_BENCHMARK["secid"]:
-        return clean_text(COMBINED_BENCHMARK.get("tencent"))
+    benchmark = benchmark_definition(secid)
+    symbol = clean_text(benchmark.get("tencent"))
+    if symbol:
+        return symbol
     return {
         "0.399001": "sz399001",
         "0.399006": "sz399006",
         "1.000001": "sh000001",
+        "1.000016": "sh000016",
         "1.000300": "sh000300",
+        "1.000680": "sh000680",
+        "1.000688": "sh000688",
+        "1.000905": "sh000905",
     }.get(clean_text(secid), "")
 
 
@@ -105,20 +172,19 @@ def fetch_tencent_benchmark_points(symbol: str, start_iso: str, end_iso: str) ->
         end = date.fromisoformat(end_iso)
     except ValueError:
         return []
-    points = []
-    for point in fetch_tencent_history_points(symbol, start, end):
-        serial = excel_serial_from_iso(point.iso)
-        if serial is None:
-            continue
-        points.append(
-            {
-                "date": date_label_from_iso(point.iso),
-                "iso": point.iso,
-                "serial": serial,
-                "close": point.close,
-            }
-        )
-    return points
+    return history_points_to_benchmark_points(fetch_tencent_history_points(symbol, start, end))
+
+
+def fetch_yahoo_benchmark_points(symbol: str, start_iso: str, end_iso: str) -> list[dict[str, object]]:
+    symbol = clean_text(symbol)
+    if not symbol or not start_iso or not end_iso:
+        return []
+    try:
+        start = date.fromisoformat(start_iso)
+        end = date.fromisoformat(end_iso)
+    except ValueError:
+        return []
+    return history_points_to_benchmark_points(fetch_yahoo_history_points(symbol, start, end))
 
 
 def fetch_eastmoney_benchmark_points(secid: str, start_iso: str, end_iso: str) -> list[dict[str, object]]:
@@ -162,28 +228,37 @@ def fetch_eastmoney_benchmark_points(secid: str, start_iso: str, end_iso: str) -
     return points
 
 
-def fetch_benchmark_points_online(secid: str, start_iso: str, end_iso: str) -> list[dict[str, object]]:
-    points = fetch_tencent_benchmark_points(benchmark_tencent_symbol(secid), start_iso, end_iso)
+def fetch_benchmark_points_online(identifier: object, start_iso: str, end_iso: str) -> list[dict[str, object]]:
+    benchmark = benchmark_definition(identifier)
+    secid = clean_text(benchmark.get("secid"))
+    tencent_symbol = clean_text(benchmark.get("tencent")) or benchmark_tencent_symbol(secid)
+    points = fetch_tencent_benchmark_points(tencent_symbol, start_iso, end_iso)
+    if points:
+        return points
+    yahoo_symbol = clean_text(benchmark.get("yahoo"))
+    points = fetch_yahoo_benchmark_points(yahoo_symbol, start_iso, end_iso)
     if points:
         return points
     return fetch_eastmoney_benchmark_points(secid, start_iso, end_iso)
 
 
-def fetch_benchmark_points(secid: str, start_iso: str, end_iso: str) -> list[dict[str, object]]:
-    if not secid or not start_iso or not end_iso:
+def fetch_benchmark_points(identifier: object, start_iso: str, end_iso: str) -> list[dict[str, object]]:
+    benchmark = benchmark_definition(identifier)
+    cache_id = benchmark_cache_identifier(benchmark)
+    if not cache_id or not start_iso or not end_iso:
         return []
     cache = load_benchmark_cache()
     ranges = cache.get("ranges")
     if not isinstance(ranges, dict):
         ranges = {}
         cache["ranges"] = ranges
-    key = benchmark_cache_key(secid, start_iso, end_iso)
+    key = benchmark_cache_key(cache_id, start_iso, end_iso)
     entry = ranges.get(key)
     cached_points = cache_entry_points(entry)
     if cached_points and is_cache_entry_fresh(entry):
         return cached_points
 
-    points = fetch_benchmark_points_online(secid, start_iso, end_iso)
+    points = fetch_benchmark_points_online(benchmark, start_iso, end_iso)
     if points:
         ranges[key] = {
             "fetched_at": date.today().isoformat(),
@@ -192,6 +267,38 @@ def fetch_benchmark_points(secid: str, start_iso: str, end_iso: str) -> list[dic
         save_benchmark_cache(cache)
         return points
     return cached_points
+
+
+def fetch_benchmark_payloads(start_iso: str, end_iso: str) -> list[dict[str, object]]:
+    if not start_iso or not end_iso:
+        return []
+    results: dict[str, list[dict[str, object]]] = {}
+    workers = min(6, len(BENCHMARKS))
+    with ThreadPoolExecutor(max_workers=workers) as executor:
+        future_map = {
+            executor.submit(fetch_benchmark_points, benchmark, start_iso, end_iso): benchmark
+            for benchmark in BENCHMARKS
+        }
+        for future in as_completed(future_map):
+            benchmark = future_map[future]
+            benchmark_id = clean_text(benchmark.get("id"))
+            try:
+                results[benchmark_id] = future.result()
+            except Exception:
+                results[benchmark_id] = []
+    payloads = []
+    for benchmark in BENCHMARKS:
+        benchmark_id = clean_text(benchmark.get("id"))
+        payloads.append(
+            {
+                "id": benchmark_id,
+                "market": clean_text(benchmark.get("market")),
+                "label": clean_text(benchmark.get("label")),
+                "shortLabel": clean_text(benchmark.get("short_label")) or clean_text(benchmark.get("label")),
+                "points": results.get(benchmark_id, []),
+            }
+        )
+    return payloads
 
 
 def normalize_curve_points(points: list[dict[str, object]]) -> list[dict[str, object]]:
@@ -327,10 +434,13 @@ def curve_payload(series_list: list[dict[str, object]]) -> list[dict[str, object
     points = list(combined.get("points") or [])
     start_iso = str(points[0]["iso"]) if points else ""
     end_iso = str(points[-1]["iso"]) if points else ""
-    benchmark_points = fetch_benchmark_points(COMBINED_BENCHMARK["secid"], start_iso, end_iso)
-    combined["benchmark"] = {
+    benchmarks = fetch_benchmark_payloads(start_iso, end_iso)
+    combined["benchmarks"] = benchmarks
+    combined["benchmark"] = benchmarks[0] if benchmarks else {
+        "id": COMBINED_BENCHMARK["id"],
+        "market": COMBINED_BENCHMARK["market"],
         "label": COMBINED_BENCHMARK["label"],
-        "points": benchmark_points,
+        "points": [],
     }
     return [combined]
 
@@ -548,6 +658,57 @@ def render_curve_script(payload: list[dict[str, object]]) -> str:
                       }});
                     }});
                     return latest;
+                  }}
+
+                  function benchmarksForSeries(series) {{
+                    const items = Array.isArray(series?.benchmarks) && series.benchmarks.length
+                      ? series.benchmarks
+                      : (series?.benchmark ? [series.benchmark] : []);
+                    return items.filter((benchmark) => benchmark && (benchmark.id || benchmark.label));
+                  }}
+
+                  function activeBenchmarkId() {{
+                    const active = root.querySelector('.ths-curve-benchmark.is-active');
+                    return active?.dataset.curveBenchmark || root.dataset.curveBenchmark || '';
+                  }}
+
+                  function selectedBenchmarkFor(series) {{
+                    const benchmarks = benchmarksForSeries(series);
+                    if (!benchmarks.length) return null;
+                    const selectedId = activeBenchmarkId();
+                    return benchmarks.find((benchmark) => String(benchmark.id || benchmark.label) === selectedId)
+                      || benchmarks.find((benchmark) => (benchmark.points || []).length)
+                      || benchmarks[0];
+                  }}
+
+                  function updateBenchmarkTabs() {{
+                    const tabs = root.querySelector('[data-curve-benchmark-tabs]');
+                    if (!tabs) return;
+                    const benchmarks = benchmarksForSeries(seriesList[0] || {{}});
+                    const previousId = activeBenchmarkId();
+                    const firstId = benchmarks.length ? String(benchmarks[0].id || benchmarks[0].label || '') : '';
+                    const selectedId = benchmarks.some((benchmark) => String(benchmark.id || benchmark.label) === previousId)
+                      ? previousId
+                      : firstId;
+                    root.dataset.curveBenchmark = selectedId;
+                    tabs.innerHTML = '';
+                    benchmarks.forEach((benchmark) => {{
+                      const benchmarkId = String(benchmark.id || benchmark.label || '');
+                      const label = String(benchmark.label || benchmarkId || '市场基准');
+                      const shortLabel = String(benchmark.shortLabel || label);
+                      const market = String(benchmark.market || '');
+                      const hasPoints = (benchmark.points || []).length > 0;
+                      const button = document.createElement('button');
+                      button.type = 'button';
+                      button.className = `ths-curve-benchmark${{benchmarkId === selectedId ? ' is-active' : ''}}${{hasPoints ? '' : ' is-empty'}}`;
+                      button.dataset.curveBenchmark = benchmarkId;
+                      button.textContent = shortLabel;
+                      button.setAttribute('aria-label', label);
+                      button.title = market ? `${{label}} · ${{market}}` : label;
+                      button.setAttribute('aria-pressed', benchmarkId === selectedId ? 'true' : 'false');
+                      tabs.appendChild(button);
+                    }});
+                    tabs.hidden = !benchmarks.length;
                   }}
 
                   function rangeStart(range, latest, customStart) {{
@@ -905,9 +1066,10 @@ def render_curve_script(payload: list[dict[str, object]]) -> str:
                     metric = metric === 'amount' ? 'amount' : 'return';
                     assists = assists || activeAssists();
                     let points = filteredPoints(series.points || [], range, latest, customStart, customEnd);
-                    const rawBenchmarkPoints = series.benchmark?.points || [];
-                    const benchmarkPoints = series.benchmark
-                      ? filteredPoints(series.benchmark.points || [], range, latest, customStart, customEnd)
+                    const activeBenchmark = selectedBenchmarkFor(series);
+                    const rawBenchmarkPoints = activeBenchmark?.points || [];
+                    const benchmarkPoints = activeBenchmark
+                      ? filteredPoints(rawBenchmarkPoints, range, latest, customStart, customEnd)
                       : [];
                     const svg = card.querySelector('.curve-svg');
                     if (!svg || !points.length) return;
@@ -1296,7 +1458,7 @@ def render_curve_script(payload: list[dict[str, object]]) -> str:
                     }}).filter((point) => Number.isFinite(point.x) && Number.isFinite(point.y));
                     card._curveHoverState = {{
                       metric,
-                      benchmarkLabel: series.benchmark?.label || '上证指数',
+                      benchmarkLabel: activeBenchmark?.label || '市场基准',
                       points: hoverPoints,
                       hoverLayer,
                       hoverLine,
@@ -1332,7 +1494,7 @@ def render_curve_script(payload: list[dict[str, object]]) -> str:
                     card.dataset.accountAmount = Number.isFinite(periodPnl) ? String(periodPnl) : '';
                     card.dataset.benchmarkAmount = Number.isFinite(periodBenchmarkAmount) ? String(periodBenchmarkAmount) : '';
                     card.dataset.excessAmount = Number.isFinite(periodExcessAmount) ? String(periodExcessAmount) : '';
-                    card.dataset.benchmarkLabel = series.benchmark?.label || '市场基准';
+                    card.dataset.benchmarkLabel = activeBenchmark?.label || '市场基准';
                     card.dataset.periodPnl = Number.isFinite(periodPnl) ? String(periodPnl) : '';
                     card.dataset.periodReturn = Number.isFinite(periodReturn) ? String(periodReturn) : '';
                     card.dataset.periodLabel = rangePnlLabel(range);
@@ -1363,6 +1525,7 @@ def render_curve_script(payload: list[dict[str, object]]) -> str:
                     const mine = root.querySelector('[data-curve-summary-mine]');
                     const benchmark = root.querySelector('[data-curve-summary-benchmark]');
                     const benchmarkName = root.querySelector('[data-curve-summary-benchmark-name]');
+                    const legendBenchmark = root.querySelector('[data-curve-legend-benchmark]');
                     const summary = root.querySelector('[data-curve-summary-title]')?.closest('.ths-curve-summary');
                     const barScale = Math.max(Math.abs(accountValue || 0), Math.abs(benchmarkValue || 0), 1);
                     if (summary) summary.classList.toggle('is-empty', !Number.isFinite(benchmarkValue));
@@ -1375,6 +1538,7 @@ def render_curve_script(payload: list[dict[str, object]]) -> str:
                     if (mine) mine.textContent = metricText(accountValue, metricMode);
                     if (benchmark) benchmark.textContent = metricText(benchmarkValue, metricMode);
                     if (benchmarkName) benchmarkName.textContent = `${{benchmarkLabel}}:`;
+                    if (legendBenchmark) legendBenchmark.textContent = benchmarkLabel;
                     updateSummaryBar(mine?.closest('div'), accountValue, barScale);
                     updateSummaryBar(benchmark?.closest('div'), benchmarkValue, barScale);
                   }}
@@ -1407,6 +1571,7 @@ def render_curve_script(payload: list[dict[str, object]]) -> str:
                     const rate = root.querySelector('[data-curve-hero-rate]');
                     const rateLabel = root.querySelector('[data-curve-hero-rate-label]');
                     const comparePill = root.querySelector('[data-curve-compare-pill]');
+                    const compareLabel = root.querySelector('[data-curve-compare-label]');
                     const compareBenchmark = root.querySelector('[data-curve-compare-benchmark]');
                     const compareExcess = root.querySelector('[data-curve-compare-excess]');
                     captureCurveHeroDefaults();
@@ -1414,6 +1579,7 @@ def render_curve_script(payload: list[dict[str, object]]) -> str:
                     const periodReturn = Number(primaryCard.dataset.periodReturn || 'NaN');
                     const benchmarkReturn = Number(primaryCard.dataset.benchmarkReturn || 'NaN');
                     const excessReturn = Number(primaryCard.dataset.excessReturn || 'NaN');
+                    const benchmarkLabel = primaryCard.dataset.benchmarkLabel || '指数';
                     const start = shortDateLabel(primaryCard.dataset.periodStart || '');
                     const end = shortDateLabel(primaryCard.dataset.periodEnd || '');
                     const dateRange = start && end ? `(${{start}}-${{end}})` : '';
@@ -1428,6 +1594,7 @@ def render_curve_script(payload: list[dict[str, object]]) -> str:
                     }}
                     if (rateLabel) rateLabel.textContent = primaryCard.dataset.periodRateLabel || '区间收益率';
                     if (comparePill) comparePill.hidden = !Number.isFinite(benchmarkReturn);
+                    if (compareLabel) compareLabel.textContent = `同期${{benchmarkLabel}}`;
                     if (compareBenchmark) compareBenchmark.textContent = percentText(benchmarkReturn);
                     if (compareExcess) {{
                       compareExcess.classList.remove('value-positive', 'value-negative', 'value-zero');
@@ -1464,6 +1631,17 @@ def render_curve_script(payload: list[dict[str, object]]) -> str:
                     }});
                   }});
                   root.addEventListener('click', (event) => {{
+                    const benchmarkButton = event.target?.closest?.('.ths-curve-benchmark');
+                    if (benchmarkButton && root.contains(benchmarkButton)) {{
+                      root.querySelectorAll('.ths-curve-benchmark').forEach((item) => {{
+                        const active = item === benchmarkButton;
+                        item.classList.toggle('is-active', active);
+                        item.setAttribute('aria-pressed', active ? 'true' : 'false');
+                      }});
+                      root.dataset.curveBenchmark = benchmarkButton.dataset.curveBenchmark || '';
+                      redraw();
+                      return;
+                    }}
                     const metricButton = event.target?.closest?.('.ths-curve-metric');
                     if (metricButton && root.contains(metricButton)) {{
                       root.querySelectorAll('.ths-curve-metric').forEach((item) => item.classList.remove('is-active'));
@@ -1482,6 +1660,7 @@ def render_curve_script(payload: list[dict[str, object]]) -> str:
                   root.querySelectorAll('[data-curve-custom-start], [data-curve-custom-end]').forEach((input) => {{
                     input.addEventListener('change', redraw);
                   }});
+                  updateBenchmarkTabs();
                   if (document.readyState === 'loading') {{
                     document.addEventListener('DOMContentLoaded', redraw, {{ once: true }});
                   }} else {{

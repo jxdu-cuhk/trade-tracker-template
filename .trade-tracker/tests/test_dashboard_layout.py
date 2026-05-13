@@ -103,6 +103,8 @@ class DashboardLayoutTests(unittest.TestCase):
         self.assertIn("460,060.03", updated)
         self.assertIn("2.11%", updated)
         self.assertIn("上证指数", updated)
+        self.assertIn("data-curve-benchmark-tabs", updated)
+        self.assertIn("data-curve-compare-label", updated)
         self.assertIn('data-curve-metric="amount"', updated)
         self.assertIn('data-curve-assist="extreme"', updated)
         self.assertIn('data-curve-assist="growth"', updated)
