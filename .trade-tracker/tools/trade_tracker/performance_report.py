@@ -121,18 +121,45 @@ def render_performance_report_section() -> str:
                 return Number.isFinite(parsed) ? parsed : NaN;
               }
 
+              function reportingCurrency() {
+                const label = document.documentElement.dataset.reportingCurrency || '人民币';
+                return ['人民币', '港币', '美元'].includes(label) ? label : '人民币';
+              }
+
+              function rateToCnyForCurrency(currency) {
+                const label = String(currency || '').trim() || '人民币';
+                const rate = Number((window.tradeTrackerFxRatesToCny || {})[label]);
+                return Number.isFinite(rate) && rate > 0 ? rate : 1;
+              }
+
+              function reportingRateToCny() {
+                const api = window.tradeTrackerReportingCurrency;
+                if (api && typeof api.rateToCny === 'function') {
+                  const rate = Number(api.rateToCny());
+                  if (Number.isFinite(rate) && rate > 0) return rate;
+                }
+                return rateToCnyForCurrency(reportingCurrency());
+              }
+
+              function reportingMoney(value) {
+                const numeric = number(value);
+                return Number.isFinite(numeric) ? numeric / reportingRateToCny() : NaN;
+              }
+
               function signedMoney(value) {
-                if (!Number.isFinite(value)) return '--';
-                const sign = value > 0 ? '+' : value < 0 ? '-' : '';
-                return sign + Math.abs(value).toLocaleString('zh-CN', { minimumFractionDigits: 2, maximumFractionDigits: 2 });
+                const converted = reportingMoney(value);
+                if (!Number.isFinite(converted)) return '--';
+                const sign = converted > 0 ? '+' : converted < 0 ? '-' : '';
+                return sign + Math.abs(converted).toLocaleString('zh-CN', { minimumFractionDigits: 2, maximumFractionDigits: 2 });
               }
 
               function compactMoney(value) {
-                if (!Number.isFinite(value)) return '--';
-                const sign = value > 0 ? '+' : value < 0 ? '-' : '';
-                const abs = Math.abs(value);
+                const converted = reportingMoney(value);
+                if (!Number.isFinite(converted)) return '--';
+                const sign = converted > 0 ? '+' : converted < 0 ? '-' : '';
+                const abs = Math.abs(converted);
                 if (abs >= 10000) return `${sign}${(abs / 10000).toFixed(abs >= 100000 ? 0 : 1)}万`;
-                return signedMoney(value);
+                return signedMoney(converted * reportingRateToCny());
               }
 
               function percent(value) {
@@ -145,7 +172,7 @@ def render_performance_report_section() -> str:
               }
 
               function metricLabel() {
-                return reportMode === 'rate' ? '收益率' : '折人民币';
+                return reportMode === 'rate' ? '收益率' : `折${reportingCurrency()}`;
               }
 
               function shortDate(iso) {
@@ -611,10 +638,11 @@ def render_performance_report_section() -> str:
                   const name = String(trade.name || code).trim() || code;
                   const pnl = number(trade.pnl);
                   if (!Number.isFinite(pnl)) return;
+                  const rate = rateToCnyForCurrency(currency);
                   const key = `${code}|${currency}`;
                   const item = buckets.get(key) || { code, name, currency, pnl: 0, capital: 0, count: 0 };
-                  item.pnl += pnl;
-                  item.capital += Math.abs(number(trade.capital) || 0);
+                  item.pnl += pnl * rate;
+                  item.capital += Math.abs((number(trade.capital) || 0) * rate);
                   item.count += 1;
                   buckets.set(key, item);
                 });
@@ -661,9 +689,10 @@ def render_performance_report_section() -> str:
                   const currency = (cells[currencyIndex]?.textContent || '').trim();
                   const pnl = number(row.dataset.totalPnl);
                   if (!code || code === '汇总' || !Number.isFinite(pnl)) return;
+                  const rate = rateToCnyForCurrency(currency);
                   const key = `${code}|${currency}`;
                   const item = buckets.get(key) || { code, name, currency, pnl: 0, rate: NaN };
-                  item.pnl += pnl;
+                  item.pnl += pnl * rate;
                   buckets.set(key, item);
                 });
                 return Array.from(buckets.values()).sort((a, b) => Math.abs(b.pnl) - Math.abs(a.pnl));
@@ -755,7 +784,7 @@ def render_performance_report_section() -> str:
                       const value = stockMetricValue(item);
                       const tone = value >= 0 ? 'positive' : 'negative';
                       const title = item.name.length > 10 ? item.name.slice(0, 10) + '...' : item.name;
-                      const currencyLabel = reportMode === 'rate' ? '收益率' : (item.currency ? `${item.currency}折人民币` : '折人民币');
+                      const currencyLabel = reportMode === 'rate' ? '收益率' : (item.currency ? `${item.currency}折${reportingCurrency()}` : `折${reportingCurrency()}`);
                       const compactClass = rect.width < 14 || rect.height < 16 ? ' is-compact' : rect.width < 22 || rect.height < 20 ? ' is-small' : '';
                       const fullTitle = `${item.name || item.code} ${stockMetricText(item)}`;
                       const style = `left:${rect.x.toFixed(2)}%;top:${rect.y.toFixed(2)}%;width:${rect.width.toFixed(2)}%;height:${rect.height.toFixed(2)}%;`;
@@ -789,6 +818,7 @@ def render_performance_report_section() -> str:
                 renderCompare();
                 renderCalendar();
               }
+              window.addEventListener('trade-tracker-reporting-currency-change', renderAllPerformance);
 
               if (modeControl) {
                 modeControl.addEventListener('click', (event) => {

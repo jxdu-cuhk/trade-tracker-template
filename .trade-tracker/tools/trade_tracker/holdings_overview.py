@@ -289,13 +289,28 @@ def reference_float_metrics(core, rows: list[tuple[int, dict[int, object]]], met
     return {"active": "day", "ranges": ranges}
 
 
-def render_metric(label: str, value: str, value_class: str = "", detail: str = "") -> str:
+def reporting_money_attrs(value: float | None, signed: bool = False) -> str:
+    if value is None:
+        return ""
+    return f' data-reporting-money-cny="{float(value):.6f}" data-reporting-money-sign="{"true" if signed else "false"}"'
+
+
+def render_metric(
+    label: str,
+    value: str,
+    value_class: str = "",
+    detail: str = "",
+    reporting_value: float | None = None,
+    signed: bool = False,
+    detail_template: str = "",
+) -> str:
     class_attr = f"holdings-account-value {value_class}".strip()
-    detail_html = f'<span>{html.escape(detail)}</span>' if detail else ""
+    detail_attrs = f' data-reporting-note-template="{html.escape(detail_template)}"' if detail_template else ""
+    detail_html = f'<span{detail_attrs}>{html.escape(detail)}</span>' if detail else ""
     return (
         '<div class="holdings-account-metric">'
         f'<span class="holdings-account-label">{html.escape(label)}</span>'
-        f'<strong class="{html.escape(class_attr)}">{html.escape(value)}</strong>'
+        f'<strong class="{html.escape(class_attr)}"{reporting_money_attrs(reporting_value, signed)}>{html.escape(value)}</strong>'
         f"{detail_html}"
         "</div>"
     )
@@ -357,7 +372,7 @@ def render_holdings_realized_panel(key: str, data: dict[str, object], active: bo
         f'<div class="holdings-realized-range{active_class}" data-holdings-range-panel="{html.escape(key)}">'
         '<div class="holdings-realized-text">'
         f'<span class="holdings-account-label">{html.escape(label)}</span>'
-        f'<strong class="holdings-account-value {html.escape(tone_class(pnl))}">{html.escape(format_signed_money(pnl))}</strong>'
+        f'<strong class="holdings-account-value {html.escape(tone_class(pnl))}"{reporting_money_attrs(pnl, True)}>{html.escape(format_signed_money(pnl))}</strong>'
         f'<span>{html.escape(format_percent(rate))}</span>'
         "</div>"
         f"{render_month_sparkline(points)}"
@@ -415,7 +430,7 @@ def render_reference_panel(key: str, data: dict[str, object], active: bool = Fal
         f'<div class="holdings-realized-range{active_class}" data-holdings-range-panel="{html.escape(key)}">'
         '<div class="holdings-realized-text">'
         f'<span class="holdings-account-label">{html.escape(label)}</span>'
-        f'<strong class="holdings-account-value {html.escape(tone_class(pnl))}">{html.escape(format_signed_money(pnl))}</strong>'
+        f'<strong class="holdings-account-value {html.escape(tone_class(pnl))}"{reporting_money_attrs(pnl, True)}>{html.escape(format_signed_money(pnl))}</strong>'
         f'<span>{html.escape(format_percent(rate))}</span>'
         "</div>"
         f"{render_month_sparkline(points)}"
@@ -486,9 +501,9 @@ def render_holdings_account_panel(metrics: dict[str, float], month: dict[str, ob
     return f"""
             <div class="holdings-account-panel">
               <div class="holdings-account-grid">
-                {render_metric("持仓总资产", format_money(asset), "", "折人民币，不含现金和卖出认沽占用")}
-                {render_metric("总盈亏", format_signed_money(float_pnl), tone_class(float_pnl), format_percent(float_rate))}
-                {render_metric("总市值", format_money(market_value), "", "按仓位绝对值，含卖出认沽占用")}
+                {render_metric("持仓总资产", format_money(asset), "", "折人民币，不含现金和卖出认沽占用", asset, False, "折{currency}，不含现金和卖出认沽占用")}
+                {render_metric("总盈亏", format_signed_money(float_pnl), tone_class(float_pnl), format_percent(float_rate), float_pnl, True)}
+                {render_metric("总市值", format_money(market_value), "", "按仓位绝对值，含卖出认沽占用", market_value)}
                 {reference_metric}
                 {month_metric}
               </div>

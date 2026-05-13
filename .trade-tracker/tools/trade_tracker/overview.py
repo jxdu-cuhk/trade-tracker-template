@@ -8,6 +8,16 @@ from .settings import OVERVIEW_CURRENCIES, OVERVIEW_CURRENCY_METRIC_ORDER, OVERV
 from .utils import cell_text
 
 
+OVERVIEW_REPORTING_MONEY_LABELS = {
+    "总盈亏",
+    "当前市值",
+    "持仓成本",
+    "已实现盈亏",
+    "持仓浮盈亏",
+    "持仓当日盈亏",
+}
+
+
 def move_dividend_metric_later(html: str) -> str:
     card_pattern = re.compile(
         r"\n\s*<div class=\"metric-card\">\s*"
@@ -218,8 +228,18 @@ def render_currency_overview_card(
     metric_map: dict[str, tuple[str, str]],
     extra_class: str = "",
 ) -> str:
+    is_reporting_card = "currency-overview-cny-card" in extra_class
     primary_labels = ["总盈亏", "总收益率", "综合年化"]
     secondary_labels = [label for label in OVERVIEW_CURRENCY_METRIC_ORDER if label not in primary_labels]
+
+    def reporting_attrs(label: str, value_text: str) -> str:
+        if not is_reporting_card or label not in OVERVIEW_REPORTING_MONEY_LABELS:
+            return ""
+        value = parse_overview_number(value_text)
+        if value is None:
+            return ""
+        return f' data-reporting-money-cny="{value:.6f}"'
+
     primary_rows = []
     for label in primary_labels:
         if label not in metric_map:
@@ -228,7 +248,7 @@ def render_currency_overview_card(
         class_attr = f' class="{value_class}"' if value_class else ""
         primary_rows.append(
             f'<div class="currency-overview-primary-row"><span>{html.escape(label)}</span>'
-            f'<strong{class_attr}>{html.escape(value)}</strong></div>'
+            f'<strong{class_attr}{reporting_attrs(label, value)}>{html.escape(value)}</strong></div>'
         )
     secondary_rows = []
     for label in secondary_labels:
@@ -238,12 +258,13 @@ def render_currency_overview_card(
         class_attr = f' class="{value_class}"' if value_class else ""
         secondary_rows.append(
             f'<div class="currency-overview-row"><span>{html.escape(label)}</span>'
-            f'<strong{class_attr}>{html.escape(value)}</strong></div>'
+            f'<strong{class_attr}{reporting_attrs(label, value)}>{html.escape(value)}</strong></div>'
         )
     class_attr = f'currency-overview-card {extra_class}'.strip()
+    title_attr = ' data-reporting-title-template="{currency}折算汇总"' if is_reporting_card else ""
     return (
         f'<div class="{html.escape(class_attr)}">'
-        f'<div class="currency-overview-head"><span>{html.escape(title)}</span><em>{html.escape(subtitle)}</em></div>'
+        f'<div class="currency-overview-head"><span{title_attr}>{html.escape(title)}</span><em>{html.escape(subtitle)}</em></div>'
         f'<div class="currency-overview-primary">{"".join(primary_rows)}</div>'
         f'<div class="currency-overview-details">{"".join(secondary_rows)}</div>'
         '</div>'

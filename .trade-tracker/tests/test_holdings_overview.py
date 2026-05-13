@@ -110,6 +110,8 @@ class HoldingsOverviewTests(unittest.TestCase):
 
         self.assertIn("holdings-account-panel", html)
         self.assertIn("持仓总资产", html)
+        self.assertIn('data-reporting-money-cny="100.000000"', html)
+        self.assertIn("折{currency}，不含现金和卖出认沽占用", html)
         self.assertIn("不含现金和卖出认沽占用", html)
         self.assertIn("含卖出认沽占用", html)
         self.assertIn("当日持仓浮盈变动", html)

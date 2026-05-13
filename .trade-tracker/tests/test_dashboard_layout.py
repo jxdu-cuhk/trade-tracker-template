@@ -3,6 +3,7 @@ from __future__ import annotations
 import sys
 import unittest
 from pathlib import Path
+from unittest.mock import patch
 
 
 TOOLS_DIR = Path(__file__).resolve().parents[1] / "tools"
@@ -62,10 +63,21 @@ class DashboardLayoutTests(unittest.TestCase):
     def test_insert_dashboard_page_tabs_before_dashboard_sections(self):
         html = "<main>" + section("当前持仓") + section("总收益曲线") + "</main>"
 
-        updated = insert_dashboard_page_tabs(html)
-        updated_again = insert_dashboard_page_tabs(updated)
+        with patch(
+            "trade_tracker.dashboard_layout.reporting_currency_options",
+            return_value=[
+                {"label": "人民币", "rateToCny": 1.0},
+                {"label": "港币", "rateToCny": 0.9},
+                {"label": "美元", "rateToCny": 7.2},
+            ],
+        ):
+            updated = insert_dashboard_page_tabs(html)
+            updated_again = insert_dashboard_page_tabs(updated)
 
         self.assertIn("data-dashboard-page-tabs", updated)
+        self.assertIn("data-dashboard-currency-switcher", updated)
+        self.assertIn('data-reporting-currency="港币"', updated)
+        self.assertIn("trade-tracker-reporting-currency-v1", updated)
         self.assertIn("trade-tracker-active-page-v1", updated)
         self.assertIn("setupDashboardPager", updated)
         self.assertLess(updated.index("data-dashboard-page-tabs"), updated.index('<h2 class="section-title">当前持仓</h2>'))
@@ -79,7 +91,15 @@ class DashboardLayoutTests(unittest.TestCase):
             + "</main>"
         )
 
-        updated = insert_dashboard_page_tabs(html)
+        with patch(
+            "trade_tracker.dashboard_layout.reporting_currency_options",
+            return_value=[
+                {"label": "人民币", "rateToCny": 1.0},
+                {"label": "港币", "rateToCny": 0.9},
+                {"label": "美元", "rateToCny": 7.2},
+            ],
+        ):
+            updated = insert_dashboard_page_tabs(html)
 
         self.assertLess(updated.index("data-dashboard-page-tabs"), updated.index('id="refresh-panel"'))
 

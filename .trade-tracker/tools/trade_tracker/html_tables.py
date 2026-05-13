@@ -1226,7 +1226,7 @@ def add_balanced_summary_table_script(html_text: str) -> str:
 
 
 def annotate_holdings_fx_note(html_text: str) -> str:
-    new_note = "这里只统计已经录入主表、且当前仍未平仓的现股仓位；未平仓卖出认沽会按标的并入持仓口径，最新市值和个股仓位按占用本金计算，浮动盈亏单独展示，covered call 不重复计入。个股仓位按实时汇率折成人民币口径计算，并按仓位绝对值从大到小排序。"
+    new_note = "这里只统计已经录入主表、且当前仍未平仓的现股仓位；未平仓卖出认沽会按标的并入持仓口径，最新市值和个股仓位按占用本金计算，浮动盈亏单独展示，covered call 不重复计入。个股仓位按实时汇率统一折算后计算，并按仓位绝对值从大到小排序。"
     old_notes = [
         "这里只统计已经录入主表、且当前仍未平仓的现股仓位；个股仓位按实时汇率折成人民币口径计算，并按仓位绝对值从大到小排序。盈利仓位的回本空间显示 -，亏损仓位才显示还需上涨或下跌多少。",
         "这里只统计已经录入主表、且当前仍未平仓的现股仓位，按仓位绝对值从大到小排序。空头仓位会标成“空头”，数量和最新市值会按负值展示；回本空间这一列对多头显示还需上涨多少，对空头显示还需下跌多少。",
@@ -1453,8 +1453,28 @@ def add_holdings_cny_settlement_footer_script(html_text: str) -> str:
         /* {marker} */
         (function addSummarySettlementRows() {{
           const fxRatesToCny = {rates_json};
+          window.tradeTrackerFxRatesToCny = Object.assign({{}}, window.tradeTrackerFxRatesToCny || {{}}, fxRatesToCny);
           const moneyLabels = new Set(['分红净额', '已实现盈亏', '浮动盈亏', '持仓浮盈亏', '总盈亏', '最新市值', '当日盈亏', '持仓成本']);
           const toneLabels = new Set(['分红净额', '已实现盈亏', '浮动盈亏', '持仓浮盈亏', '总盈亏', '当日盈亏', '盈亏率', '总收益率', '综合年化', '回本空间']);
+
+          function reportingCurrency() {{
+            const label = document.documentElement.dataset.reportingCurrency || '人民币';
+            return ['人民币', '港币', '美元'].includes(label) ? label : '人民币';
+          }}
+
+          function reportingRateToCny() {{
+            const api = window.tradeTrackerReportingCurrency;
+            if (api && typeof api.rateToCny === 'function') {{
+              const rate = Number(api.rateToCny());
+              if (Number.isFinite(rate) && rate > 0) return rate;
+            }}
+            const rate = Number((window.tradeTrackerFxRatesToCny || {{}})[reportingCurrency()]);
+            return Number.isFinite(rate) && rate > 0 ? rate : 1;
+          }}
+
+          function cnyToReporting(value) {{
+            return Number.isFinite(value) ? value / reportingRateToCny() : value;
+          }}
 
           function numberFromText(text) {{
             const cleaned = String(text || '').replace(/,/g, '').replace(/%/g, '').replace(/^(人民币|港币|美元)\\s+/, '').trim();
@@ -1576,6 +1596,7 @@ def add_holdings_cny_settlement_footer_script(html_text: str) -> str:
                 text = currency;
               }} else if (moneyLabels.has(label)) {{
                 numeric = stats.money[label];
+                if (isCny) numeric = cnyToReporting(numeric);
                 text = formatNumber(numeric);
                 cell.className = classForValue(label, numeric, cell.className);
               }} else if (label === '盈亏率' && stats.summaryKind === 'holdings') {{
@@ -1613,7 +1634,8 @@ def add_holdings_cny_settlement_footer_script(html_text: str) -> str:
               const {{ labels, byCurrency, cny }} = collectStats(table);
               if (!labels || !labels.length) return;
               byCurrency.forEach((stats, currency) => appendRow(tfoot, table, labels, stats, currency, `${{currency}}汇总`, false));
-              appendRow(tfoot, table, labels, cny, '人民币', '人民币折算汇总', true);
+              const targetCurrency = reportingCurrency();
+              appendRow(tfoot, table, labels, cny, targetCurrency, `${{targetCurrency}}折算汇总`, true);
             }});
           }}
 
@@ -1654,6 +1676,7 @@ def add_holdings_cny_settlement_footer_script(html_text: str) -> str:
             scheduleApply();
           }}
           window.addEventListener('load', scheduleApply);
+          window.addEventListener('trade-tracker-reporting-currency-change', scheduleApply);
         }})();
         </script>
 """

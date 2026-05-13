@@ -15,7 +15,7 @@ TOOLS_DIR = Path(__file__).resolve().parents[1] / "tools"
 sys.path.insert(0, str(TOOLS_DIR))
 
 import trade_tracker.return_curve as return_curve_module
-from trade_tracker.return_curve import combine_series_to_cny, curve_payload, render_tonghuashun_curve_panels
+from trade_tracker.return_curve import combine_series_to_cny, curve_payload, date_iso, render_tonghuashun_curve_panels
 
 
 class ReturnCurveTests(unittest.TestCase):
@@ -45,6 +45,9 @@ class ReturnCurveTests(unittest.TestCase):
             "罗素2000",
         ]:
             self.assertIn(label, labels)
+
+    def test_date_iso_accepts_compact_csindex_dates(self):
+        self.assertEqual(date_iso("20220411"), "2022-04-11")
 
     def test_combine_series_to_cny_merges_currency_points(self):
         with patch("trade_tracker.return_curve.current_fx_rates_to_cny", return_value={"人民币": 1.0, "港币": 0.9, "美元": 7.2}):
@@ -244,6 +247,39 @@ class ReturnCurveTests(unittest.TestCase):
         self.assertEqual(points, tencent_points)
         fetch_tencent.assert_called_once_with("sh000001", "2026-05-01", "2026-05-07")
         fetch_eastmoney.assert_not_called()
+
+    def test_fetch_benchmark_points_online_backfills_star_composite_from_csindex(self):
+        tencent_points = [{"date": "2025/01/20", "iso": "2025-01-20", "serial": 45677, "close": 1200}]
+        csindex_points = [{"date": "2022/04/11", "iso": "2022-04-11", "serial": 44662, "close": 1146.55}]
+        with (
+            patch.object(return_curve_module, "fetch_tencent_benchmark_points", return_value=tencent_points) as fetch_tencent,
+            patch.object(return_curve_module, "fetch_csindex_benchmark_points", return_value=csindex_points) as fetch_csindex,
+        ):
+            points = return_curve_module.fetch_benchmark_points_online("star", "2022-04-11", "2026-05-13")
+
+        self.assertEqual(points, csindex_points)
+        fetch_tencent.assert_called_once_with("sh000680", "2022-04-11", "2026-05-13")
+        fetch_csindex.assert_called_once_with("000680", "2022-04-11", "2026-05-13")
+
+    def test_fetch_benchmark_points_refreshes_short_star_cache(self):
+        with tempfile.TemporaryDirectory() as temp_dir:
+            cache_path = Path(temp_dir) / "benchmark_history.json"
+            key = return_curve_module.benchmark_cache_key("1.000680", "2022-04-11", "2026-05-13")
+            cached_points = [{"date": "2025/01/20", "iso": "2025-01-20", "serial": 45677, "close": 1200}]
+            online_points = [{"date": "2022/04/11", "iso": "2022-04-11", "serial": 44662, "close": 1146.55}]
+            cache_path.write_text(
+                json.dumps({"version": 1, "ranges": {key: {"fetched_at": date.today().isoformat(), "points": cached_points}}}),
+                encoding="utf-8",
+            )
+
+            with (
+                patch.object(return_curve_module, "BENCHMARK_CACHE_PATH", cache_path),
+                patch.object(return_curve_module, "fetch_benchmark_points_online", return_value=online_points) as fetch_online,
+            ):
+                points = return_curve_module.fetch_benchmark_points("star", "2022-04-11", "2026-05-13")
+
+        self.assertEqual(points, online_points)
+        fetch_online.assert_called_once()
 
     def test_fetch_benchmark_points_online_uses_yahoo_for_us_index(self):
         yahoo_points = [{"date": "2026/05/07", "iso": "2026-05-07", "serial": 46149, "close": 5100.5}]

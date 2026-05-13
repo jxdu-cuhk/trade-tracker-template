@@ -1,8 +1,10 @@
 from __future__ import annotations
 
 import html
+import json
 import re
 
+from .reporting_currency import REPORTING_CURRENCIES, reporting_currency_options
 from .utils import cell_text, clean_text
 
 
@@ -81,7 +83,13 @@ def collapse_secondary_sections(html_text: str) -> str:
 
 
 DASHBOARD_PAGER_HTML = """
-<nav class="dashboard-page-tabs" data-dashboard-page-tabs aria-label="看板分页"></nav>
+<div class="dashboard-topbar" data-dashboard-topbar>
+  <nav class="dashboard-page-tabs" data-dashboard-page-tabs aria-label="看板分页"></nav>
+  <div class="dashboard-currency-switcher" data-dashboard-currency-switcher aria-label="统一口径币种">
+    <span>统一口径</span>
+    {buttons}
+  </div>
+</div>
 """
 
 
@@ -166,6 +174,141 @@ DASHBOARD_PAGER_SCRIPT = """
 """
 
 
+def safe_json(data: object) -> str:
+    return (
+        json.dumps(data, ensure_ascii=False, separators=(",", ":"))
+        .replace("&", "\\u0026")
+        .replace("<", "\\u003c")
+        .replace(">", "\\u003e")
+    )
+
+
+def render_dashboard_pager_html() -> str:
+    buttons = "\n    ".join(
+        f'<button type="button" data-reporting-currency-button data-reporting-currency="{html.escape(currency)}">{html.escape(currency)}</button>'
+        for currency in REPORTING_CURRENCIES
+    )
+    return DASHBOARD_PAGER_HTML.format(buttons=buttons)
+
+
+def render_dashboard_currency_script() -> str:
+    options = reporting_currency_options()
+    rates = {str(item["label"]): float(item["rateToCny"]) for item in options}
+    options_json = safe_json(options)
+    rates_json = safe_json(rates)
+    return f"""
+<script>
+(function setupDashboardReportingCurrency() {{
+  const currencyOptions = {options_json};
+  const fxRatesToCny = {rates_json};
+  window.tradeTrackerFxRatesToCny = Object.assign({{}}, window.tradeTrackerFxRatesToCny || {{}}, fxRatesToCny);
+
+  function ready(callback) {{
+    if (document.readyState === "loading") {{
+      document.addEventListener("DOMContentLoaded", callback, {{ once: true }});
+      return;
+    }}
+    callback();
+  }}
+
+  function validCurrency(label) {{
+    return currencyOptions.some((item) => item.label === label) ? label : "人民币";
+  }}
+
+  function activeCurrency() {{
+    return validCurrency(document.documentElement.dataset.reportingCurrency || "人民币");
+  }}
+
+  function rateToCny(label) {{
+    const rate = Number((window.tradeTrackerFxRatesToCny || {{}})[validCurrency(label)]);
+    return Number.isFinite(rate) && rate > 0 ? rate : 1;
+  }}
+
+  function fromCny(value, label) {{
+    const numeric = Number(value);
+    if (!Number.isFinite(numeric)) return NaN;
+    return numeric / rateToCny(label || activeCurrency());
+  }}
+
+  function formatMoney(value, signed) {{
+    if (!Number.isFinite(value)) return "--";
+    const sign = signed && value > 0 ? "+" : "";
+    return sign + value.toLocaleString("zh-CN", {{ minimumFractionDigits: 2, maximumFractionDigits: 2 }});
+  }}
+
+  function updateMoneyNodes(label) {{
+    document.querySelectorAll("[data-reporting-money-cny]").forEach((node) => {{
+      const raw = Number(node.dataset.reportingMoneyCny || "NaN");
+      const converted = fromCny(raw, label);
+      node.textContent = formatMoney(converted, node.dataset.reportingMoneySign === "true");
+      if (Number.isFinite(converted)) node.dataset.sortValue = String(converted);
+    }});
+  }}
+
+  function updateCurrencyLabels(label) {{
+    document.querySelectorAll("[data-reporting-currency-label]").forEach((node) => {{
+      node.textContent = label;
+    }});
+    document.querySelectorAll("[data-reporting-title-template]").forEach((node) => {{
+      node.textContent = String(node.dataset.reportingTitleTemplate || "").replace(/\\{{currency\\}}/g, label);
+    }});
+    document.querySelectorAll("[data-reporting-note-template]").forEach((node) => {{
+      node.textContent = String(node.dataset.reportingNoteTemplate || "").replace(/\\{{currency\\}}/g, label);
+    }});
+  }}
+
+  function updateButtons(label) {{
+    document.querySelectorAll("[data-reporting-currency-button]").forEach((button) => {{
+      const active = button.dataset.reportingCurrency === label;
+      button.classList.toggle("is-active", active);
+      button.setAttribute("aria-pressed", active ? "true" : "false");
+    }});
+  }}
+
+  function setReportingCurrency(label, options) {{
+    const next = validCurrency(label);
+    const opts = options || {{}};
+    document.documentElement.dataset.reportingCurrency = next;
+    updateButtons(next);
+    updateCurrencyLabels(next);
+    updateMoneyNodes(next);
+    if (opts.persist !== false) {{
+      try {{
+        window.localStorage.setItem("trade-tracker-reporting-currency-v1", next);
+      }} catch (error) {{}}
+    }}
+    if (opts.dispatch !== false) {{
+      window.dispatchEvent(new CustomEvent("trade-tracker-reporting-currency-change", {{
+        detail: {{ currency: next, rateToCny: rateToCny(next) }}
+      }}));
+    }}
+  }}
+
+  window.tradeTrackerReportingCurrency = {{
+    label: activeCurrency,
+    rateToCny: function(label) {{ return rateToCny(label || activeCurrency()); }},
+    fromCny: function(value, label) {{ return fromCny(value, label); }},
+    formatMoney: formatMoney,
+    set: setReportingCurrency,
+  }};
+
+  ready(function() {{
+    let stored = "人民币";
+    try {{
+      stored = window.localStorage.getItem("trade-tracker-reporting-currency-v1") || "人民币";
+    }} catch (error) {{}}
+    document.querySelectorAll("[data-reporting-currency-button]").forEach((button) => {{
+      button.addEventListener("click", function() {{
+        setReportingCurrency(button.dataset.reportingCurrency || "人民币");
+      }});
+    }});
+    setReportingCurrency(stored, {{ persist: false }});
+  }});
+}})();
+</script>
+"""
+
+
 def insert_dashboard_page_tabs(html_text: str) -> str:
     if DASHBOARD_PAGER_MARKER in html_text:
         return html_text
@@ -173,7 +316,7 @@ def insert_dashboard_page_tabs(html_text: str) -> str:
     first_section = DETAILS_PATTERN.search(html_text)
     if not first_section:
         return html_text
-    tabs = DASHBOARD_PAGER_HTML + DASHBOARD_PAGER_SCRIPT
+    tabs = render_dashboard_pager_html() + DASHBOARD_PAGER_SCRIPT + render_dashboard_currency_script()
     anchors = [
         html_text.find('id="refresh-panel"'),
         first_section.start(),
@@ -306,7 +449,7 @@ def apply_tonghuashun_curve_style(html_text: str) -> str:
     )
     section = re.sub(
         r'<p class="section-note">.*?</p>',
-        '<p class="section-note">红线为历史每天的总盈亏：截至当天已实现盈亏 + 当天仍持仓的收盘浮盈/浮亏；收益率用截至当日历史最高持仓本金近似总资产基准，避免清仓换仓时分母突然变小。港币和美元按当前汇率折成人民币后合并展示，蓝线可切换对比 A 股、港股和美股主要指数。</p>',
+        '<p class="section-note">红线为历史每天的总盈亏：截至当天已实现盈亏 + 当天仍持仓的收盘浮盈/浮亏；收益率用截至当日历史最高持仓本金近似总资产基准，避免清仓换仓时分母突然变小。不同币种会按当前汇率统一折算，金额可在人民币、港币和美元之间切换；蓝线可切换对比 A 股、港股和美股主要指数。</p>',
         section,
         count=1,
         flags=re.S,

@@ -1323,13 +1323,13 @@ details[data-ths-return-curve] .ths-curve-bars div:nth-child(2) strong {{
   font-size: 11px;
 }}
 
-.dashboard-page-tabs {{
+.dashboard-topbar {{
   position: sticky;
   top: 0;
   z-index: 5;
-  display: flex;
-  flex-wrap: wrap;
-  gap: 8px;
+  display: grid;
+  grid-template-columns: minmax(0, 1fr) auto;
+  gap: 10px;
   align-items: center;
   margin: 0 0 14px;
   border: 1px solid #edf0f2;
@@ -1338,6 +1338,14 @@ details[data-ths-return-curve] .ths-curve-bars div:nth-child(2) strong {{
   padding: 10px;
   backdrop-filter: blur(12px);
   box-shadow: 0 12px 28px rgba(60, 64, 67, 0.05);
+}}
+
+.dashboard-page-tabs {{
+  display: flex;
+  flex-wrap: wrap;
+  gap: 8px;
+  align-items: center;
+  min-width: 0;
 }}
 
 .dashboard-page-tab {{
@@ -1372,6 +1380,55 @@ details[data-ths-return-curve] .ths-curve-bars div:nth-child(2) strong {{
   background: #ff2f45;
   color: #ffffff;
   box-shadow: 0 8px 18px rgba(255, 47, 69, 0.16);
+}}
+
+.dashboard-currency-switcher {{
+  display: inline-flex;
+  align-items: center;
+  gap: 4px;
+  justify-self: end;
+  padding: 4px;
+  border: 1px solid #edf0f2;
+  border-radius: 999px;
+  background: #f8fafb;
+  white-space: nowrap;
+}}
+
+.dashboard-currency-switcher span {{
+  color: #7b838b;
+  font-size: 12px;
+  font-weight: 850;
+  padding: 0 8px;
+}}
+
+.dashboard-currency-switcher button {{
+  appearance: none;
+  min-height: 30px;
+  border: 0;
+  border-radius: 999px;
+  background: transparent;
+  color: #59646b;
+  cursor: pointer;
+  font: inherit;
+  font-size: 12px;
+  font-weight: 900;
+  padding: 0 11px;
+}}
+
+.dashboard-currency-switcher button:hover,
+.dashboard-currency-switcher button:focus-visible {{
+  color: #ff2f45;
+}}
+
+.dashboard-currency-switcher button:focus-visible {{
+  outline: 2px solid rgba(255, 47, 69, 0.18);
+  outline-offset: 2px;
+}}
+
+.dashboard-currency-switcher button.is-active {{
+  background: #202124;
+  color: #ffffff;
+  box-shadow: 0 7px 16px rgba(32, 33, 36, 0.12);
 }}
 
 .performance-report-shell {{
@@ -2063,9 +2120,19 @@ details[data-ths-return-curve] .ths-curve-bars div:nth-child(2) strong {{
     align-items: flex-start;
   }}
 
-  .dashboard-page-tabs {{
+  .dashboard-topbar {{
     position: static;
+    grid-template-columns: 1fr;
     padding: 8px;
+  }}
+
+  .dashboard-currency-switcher {{
+    justify-self: stretch;
+    overflow-x: auto;
+  }}
+
+  .dashboard-currency-switcher button {{
+    flex: 1;
   }}
 
   .dashboard-page-tab {{

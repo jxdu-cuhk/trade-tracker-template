@@ -11,7 +11,7 @@ from urllib.request import Request, urlopen
 
 from .historical_curve import SecurityHistoryPoint, fetch_tencent_history_points, fetch_yahoo_history_points
 from .market_data import current_fx_rates_to_cny
-from .runtime import APP_DIR
+from .runtime import APP_DIR, emit_progress
 from .utils import clean_text, parse_float
 
 COMBINED_CURRENCY = "人民币折算"
@@ -23,7 +23,15 @@ BENCHMARKS = [
     {"id": "sse50", "market": "A股", "label": "上证50", "short_label": "上证50", "secid": "1.000016", "tencent": "sh000016"},
     {"id": "csi300", "market": "A股", "label": "沪深300", "short_label": "沪深300", "secid": "1.000300", "tencent": "sh000300"},
     {"id": "csi500", "market": "A股", "label": "中证500", "short_label": "中证500", "secid": "1.000905", "tencent": "sh000905"},
-    {"id": "star", "market": "A股", "label": "科创综指", "short_label": "科创综指", "secid": "1.000680", "tencent": "sh000680"},
+    {
+        "id": "star",
+        "market": "A股",
+        "label": "科创综指",
+        "short_label": "科创综指",
+        "secid": "1.000680",
+        "tencent": "sh000680",
+        "csindex": "000680",
+    },
     {"id": "star50", "market": "A股", "label": "科创50", "short_label": "科创50", "secid": "1.000688", "tencent": "sh000688"},
     {"id": "hsi", "market": "港股", "label": "恒生指数", "short_label": "恒指", "tencent": "hkHSI", "yahoo": "^HSI"},
     {"id": "hstech", "market": "港股", "label": "恒生科技", "short_label": "恒科", "tencent": "hkHSTECH"},
@@ -37,10 +45,15 @@ COMBINED_BENCHMARK = BENCHMARKS[0]
 BENCHMARK_TIMEOUT = 8
 BENCHMARK_CACHE_PATH = APP_DIR / "tools" / "cache" / "benchmark_history.json"
 BENCHMARK_CACHE_TTL_DAYS = 7
+BENCHMARK_FETCH_WORKERS = 12
 
 
 def date_iso(value: object) -> str:
     text = clean_text(value)
+    compact_match = re.match(r"^(\d{4})(\d{2})(\d{2})$", text)
+    if compact_match:
+        year, month, day = (int(part) for part in compact_match.groups())
+        return f"{year:04d}-{month:02d}-{day:02d}"
     match = re.match(r"^(\d{4})[-/\.](\d{1,2})[-/\.](\d{1,2})$", text)
     if not match:
         return ""
@@ -101,6 +114,17 @@ def is_cache_entry_fresh(entry: object) -> bool:
     except ValueError:
         return False
     return (date.today() - fetched_at).days <= BENCHMARK_CACHE_TTL_DAYS
+
+
+def points_cover_start(points: list[dict[str, object]], start_iso: str) -> bool:
+    if not points or not start_iso:
+        return False
+    first_iso = clean_text(points[0].get("iso"))
+    return bool(first_iso and first_iso <= start_iso)
+
+
+def requires_start_coverage(benchmark: dict[str, object]) -> bool:
+    return bool(clean_text(benchmark.get("csindex")))
 
 
 def benchmark_definition(identifier: object) -> dict[str, object]:
@@ -228,15 +252,62 @@ def fetch_eastmoney_benchmark_points(secid: str, start_iso: str, end_iso: str) -
     return points
 
 
+def fetch_csindex_benchmark_points(index_code: str, start_iso: str, end_iso: str) -> list[dict[str, object]]:
+    index_code = clean_text(index_code)
+    if not index_code or not start_iso or not end_iso:
+        return []
+    params = {
+        "indexCode": index_code,
+        "startDate": start_iso.replace("-", ""),
+        "endDate": end_iso.replace("-", ""),
+    }
+    url = "https://www.csindex.com.cn/csindex-home/perf/index-perf?" + urlencode(params)
+    request = Request(url, headers={"User-Agent": "Mozilla/5.0"})
+    try:
+        with urlopen(request, timeout=BENCHMARK_TIMEOUT) as response:
+            payload = json.loads(response.read().decode("utf-8", "ignore"))
+    except (TimeoutError, URLError, OSError, ValueError):
+        return []
+    rows = payload.get("data") if isinstance(payload, dict) and clean_text(payload.get("code")) == "200" else []
+    if not isinstance(rows, list):
+        return []
+    points = []
+    for row in rows:
+        if not isinstance(row, dict):
+            continue
+        iso = date_iso(row.get("tradeDate"))
+        close = parse_float(row.get("close"))
+        serial = excel_serial_from_iso(iso)
+        if not iso or close is None or serial is None:
+            continue
+        points.append(
+            {
+                "date": date_label_from_iso(iso),
+                "iso": iso,
+                "serial": serial,
+                "close": close,
+            }
+        )
+    return sorted({clean_text(point["iso"]): point for point in points}.values(), key=lambda item: str(item["iso"]))
+
+
 def fetch_benchmark_points_online(identifier: object, start_iso: str, end_iso: str) -> list[dict[str, object]]:
     benchmark = benchmark_definition(identifier)
     secid = clean_text(benchmark.get("secid"))
     tencent_symbol = clean_text(benchmark.get("tencent")) or benchmark_tencent_symbol(secid)
     points = fetch_tencent_benchmark_points(tencent_symbol, start_iso, end_iso)
     if points:
+        csindex_code = clean_text(benchmark.get("csindex"))
+        if csindex_code and not points_cover_start(points, start_iso):
+            csindex_points = fetch_csindex_benchmark_points(csindex_code, start_iso, end_iso)
+            if csindex_points:
+                return csindex_points
         return points
     yahoo_symbol = clean_text(benchmark.get("yahoo"))
     points = fetch_yahoo_benchmark_points(yahoo_symbol, start_iso, end_iso)
+    if points:
+        return points
+    points = fetch_csindex_benchmark_points(clean_text(benchmark.get("csindex")), start_iso, end_iso)
     if points:
         return points
     return fetch_eastmoney_benchmark_points(secid, start_iso, end_iso)
@@ -255,7 +326,9 @@ def fetch_benchmark_points(identifier: object, start_iso: str, end_iso: str) -> 
     key = benchmark_cache_key(cache_id, start_iso, end_iso)
     entry = ranges.get(key)
     cached_points = cache_entry_points(entry)
-    if cached_points and is_cache_entry_fresh(entry):
+    if cached_points and is_cache_entry_fresh(entry) and (
+        not requires_start_coverage(benchmark) or points_cover_start(cached_points, start_iso)
+    ):
         return cached_points
 
     points = fetch_benchmark_points_online(benchmark, start_iso, end_iso)
@@ -273,12 +346,14 @@ def fetch_benchmark_payloads(start_iso: str, end_iso: str) -> list[dict[str, obj
     if not start_iso or not end_iso:
         return []
     results: dict[str, list[dict[str, object]]] = {}
-    workers = min(6, len(BENCHMARKS))
+    emit_progress("拉取指数基准", f"准备读取 {len(BENCHMARKS)} 个可切换指数基准。", 80)
+    workers = min(BENCHMARK_FETCH_WORKERS, len(BENCHMARKS))
     with ThreadPoolExecutor(max_workers=workers) as executor:
         future_map = {
             executor.submit(fetch_benchmark_points, benchmark, start_iso, end_iso): benchmark
             for benchmark in BENCHMARKS
         }
+        completed = 0
         for future in as_completed(future_map):
             benchmark = future_map[future]
             benchmark_id = clean_text(benchmark.get("id"))
@@ -286,6 +361,12 @@ def fetch_benchmark_payloads(start_iso: str, end_iso: str) -> list[dict[str, obj
                 results[benchmark_id] = future.result()
             except Exception:
                 results[benchmark_id] = []
+            completed += 1
+            emit_progress(
+                "拉取指数基准",
+                f"指数基准 {completed}/{len(BENCHMARKS)}：{clean_text(benchmark.get('short_label')) or clean_text(benchmark.get('label'))}",
+                80 + (completed / len(BENCHMARKS)) * 4,
+            )
     payloads = []
     for benchmark in BENCHMARKS:
         benchmark_id = clean_text(benchmark.get("id"))
@@ -544,9 +625,27 @@ def render_curve_script(payload: list[dict[str, object]]) -> str:
                   dims.innerWidth = dims.width - dims.left - dims.right;
                   dims.innerHeight = dims.height - dims.top - dims.bottom;
 
+                  function reportingRateToCny() {{
+                    const api = window.tradeTrackerReportingCurrency;
+                    if (api && typeof api.rateToCny === 'function') {{
+                      const rate = Number(api.rateToCny());
+                      if (Number.isFinite(rate) && rate > 0) return rate;
+                    }}
+                    const label = document.documentElement.dataset.reportingCurrency || '人民币';
+                    const rate = Number((window.tradeTrackerFxRatesToCny || {{}})[label]);
+                    return Number.isFinite(rate) && rate > 0 ? rate : 1;
+                  }}
+
+                  function reportingMoneyValue(value) {{
+                    const numeric = Number(value);
+                    if (!Number.isFinite(numeric)) return NaN;
+                    return numeric / reportingRateToCny();
+                  }}
+
                   function moneyText(value) {{
-                    if (!Number.isFinite(value)) return '--';
-                    return value.toLocaleString('zh-CN', {{ minimumFractionDigits: 2, maximumFractionDigits: 2 }});
+                    const converted = reportingMoneyValue(value);
+                    if (!Number.isFinite(converted)) return '--';
+                    return converted.toLocaleString('zh-CN', {{ minimumFractionDigits: 2, maximumFractionDigits: 2 }});
                   }}
 
                   function signedMoneyText(value) {{
@@ -555,10 +654,12 @@ def render_curve_script(payload: list[dict[str, object]]) -> str:
                   }}
 
                   function compactMoneyText(value) {{
-                    if (!Number.isFinite(value)) return '--';
-                    const abs = Math.abs(value);
-                    if (abs >= 100000000) return `${{(value / 100000000).toFixed(2)}}亿`;
-                    if (abs >= 10000) return `${{(value / 10000).toFixed(2)}}万`;
+                    const converted = reportingMoneyValue(value);
+                    if (!Number.isFinite(converted)) return '--';
+                    const abs = Math.abs(converted);
+                    const sign = converted < 0 ? '-' : '';
+                    if (abs >= 100000000) return `${{sign}}${{(abs / 100000000).toFixed(2)}}亿`;
+                    if (abs >= 10000) return `${{sign}}${{(abs / 10000).toFixed(2)}}万`;
                     return moneyText(value);
                   }}
 
@@ -1660,6 +1761,7 @@ def render_curve_script(payload: list[dict[str, object]]) -> str:
                   root.querySelectorAll('[data-curve-custom-start], [data-curve-custom-end]').forEach((input) => {{
                     input.addEventListener('change', redraw);
                   }});
+                  window.addEventListener('trade-tracker-reporting-currency-change', redraw);
                   updateBenchmarkTabs();
                   if (document.readyState === 'loading') {{
                     document.addEventListener('DOMContentLoaded', redraw, {{ once: true }});
