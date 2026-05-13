@@ -45,54 +45,68 @@ def add_refresh_progress_panel(html_text: str) -> str:
     style = """
         <style>
         .refresh-panel {
-          margin: 18px 0 20px;
-          padding: 18px;
-          border: 1px solid rgba(196, 215, 202, 0.92);
-          border-radius: 24px;
+          margin: 0 0 14px;
+          padding: 10px 14px;
+          border: 1px solid #dbe6de;
+          border-radius: 16px;
           background:
-            radial-gradient(circle at 90% 12%, rgba(251, 188, 4, 0.20), transparent 110px),
-            linear-gradient(135deg, rgba(255, 255, 255, 0.98), rgba(239, 248, 241, 0.97));
-          box-shadow: 0 18px 42px rgba(60, 64, 67, 0.08);
+            radial-gradient(circle at 92% 8%, rgba(251, 188, 4, 0.12), transparent 96px),
+            rgba(255, 255, 255, 0.94);
+          box-shadow: 0 10px 24px rgba(60, 64, 67, 0.04);
         }
 
         .refresh-panel-head {
           display: flex;
-          align-items: flex-start;
+          align-items: center;
           justify-content: space-between;
-          gap: 18px;
+          gap: 14px;
+        }
+
+        .refresh-panel-head > div {
+          display: flex;
+          align-items: center;
+          gap: 10px;
+          min-width: 0;
         }
 
         .refresh-kicker {
-          margin: 0 0 5px;
+          flex: 0 0 auto;
+          margin: 0;
           color: #137333;
-          font-size: 12px;
+          font-size: 11px;
           font-weight: 800;
-          letter-spacing: 0.08em;
+          letter-spacing: 0.04em;
         }
 
         .refresh-panel h2 {
-          margin: 0 0 6px;
+          flex: 0 0 auto;
+          margin: 0;
           color: #202124;
-          font-size: 22px;
+          font-size: 15px;
           line-height: 1.18;
-          letter-spacing: -0.035em;
+          letter-spacing: 0;
+          white-space: nowrap;
         }
 
         .refresh-panel p {
+          overflow: hidden;
           margin: 0;
           color: #5f6f63;
-          font-size: 13px;
-          line-height: 1.55;
+          font-size: 12px;
+          font-weight: 650;
+          line-height: 1.45;
+          text-overflow: ellipsis;
+          white-space: nowrap;
         }
 
         .refresh-button {
           flex: 0 0 auto;
           border: 0;
           border-radius: 999px;
-          padding: 10px 16px;
+          padding: 9px 15px;
           color: #fff;
           background: linear-gradient(135deg, #137333, #34a853);
-          box-shadow: 0 10px 24px rgba(19, 115, 51, 0.22);
+          box-shadow: 0 8px 18px rgba(19, 115, 51, 0.18);
           font-size: 13px;
           font-weight: 800;
           cursor: pointer;
@@ -110,7 +124,7 @@ def add_refresh_progress_panel(html_text: str) -> str:
           align-items: center;
           justify-content: space-between;
           gap: 12px;
-          margin-top: 16px;
+          margin-top: 8px;
           color: #466052;
           font-size: 12px;
           font-weight: 800;
@@ -143,8 +157,8 @@ def add_refresh_progress_panel(html_text: str) -> str:
         }
 
         .refresh-progress {
-          height: 10px;
-          margin-top: 8px;
+          height: 6px;
+          margin-top: 6px;
           overflow: hidden;
           border-radius: 999px;
           background: #dfeae3;
@@ -161,9 +175,9 @@ def add_refresh_progress_panel(html_text: str) -> str:
 
         .refresh-steps {
           display: grid;
-          gap: 8px;
-          max-height: 190px;
-          margin: 14px 0 0;
+          gap: 6px;
+          max-height: 76px;
+          margin: 8px 0 0;
           padding: 0;
           overflow: auto;
           list-style: none;
@@ -172,10 +186,10 @@ def add_refresh_progress_panel(html_text: str) -> str:
         .refresh-step {
           display: grid;
           grid-template-columns: minmax(96px, max-content) 1fr;
-          gap: 12px;
-          padding: 9px 11px;
+          gap: 10px;
+          padding: 7px 9px;
           border: 1px solid rgba(196, 215, 202, 0.72);
-          border-radius: 15px;
+          border-radius: 12px;
           background: rgba(255, 255, 255, 0.64);
           color: #5f6368;
           font-size: 12px;
@@ -203,6 +217,11 @@ def add_refresh_progress_panel(html_text: str) -> str:
         @media (max-width: 760px) {
           .refresh-panel-head {
             display: grid;
+          }
+
+          .refresh-panel-head > div {
+            display: grid;
+            gap: 4px;
           }
 
           .refresh-button {

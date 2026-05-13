@@ -10,7 +10,7 @@ from .curve_capital import attach_dynamic_curve_capital
 from .dashboard_layout import (
     apply_tonghuashun_curve_style,
     collapse_secondary_sections,
-    insert_section_order_panel,
+    insert_dashboard_page_tabs,
     reorder_dashboard_sections,
 )
 from .dividends import load_dividend_events
@@ -207,7 +207,7 @@ def patch_core(core, workbook_path: Path) -> None:
         html = reorder_dashboard_sections(html)
         html = collapse_secondary_sections(html)
         html = add_refresh_progress_panel(html)
-        html = insert_section_order_panel(html)
+        html = insert_dashboard_page_tabs(html)
         html = add_balanced_summary_table_script(html)
         html = add_holdings_cny_settlement_footer_script(html)
         html = normalize_legacy_open_option_sections(core, html)

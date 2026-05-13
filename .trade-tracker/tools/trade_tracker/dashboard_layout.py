@@ -19,14 +19,13 @@ SECTION_ORDER = [
     "交易时间线",
 ]
 DEFAULT_OPEN_SECTIONS = {"当前持仓", "未平仓期权"}
-SECTION_ORDER_STORAGE_KEY = "trade-tracker-section-order-v1"
 
 
 DETAILS_PATTERN = re.compile(
     r'<details class="dashboard-section section-collapsible"(?: [^>]*)?>.*?</details>',
     re.S,
 )
-SECTION_ORDER_PANEL_MARKER = 'data-section-order-panel'
+DASHBOARD_PAGER_MARKER = 'data-dashboard-page-tabs'
 
 
 def normalize_title(value: str) -> str:
@@ -81,284 +80,109 @@ def collapse_secondary_sections(html_text: str) -> str:
     return updated
 
 
-SECTION_ORDER_PANEL_SCRIPT = f"""
+DASHBOARD_PAGER_HTML = """
+<nav class="dashboard-page-tabs" data-dashboard-page-tabs aria-label="看板分页"></nav>
+"""
+
+
+DASHBOARD_PAGER_SCRIPT = """
 <script>
-(function() {{
-  var STORAGE_KEY = {SECTION_ORDER_STORAGE_KEY!r};
-
-  function ready(callback) {{
-    if (document.readyState === "loading") {{
-      document.addEventListener("DOMContentLoaded", callback, {{ once: true }});
+(function setupDashboardPager() {
+  function ready(callback) {
+    if (document.readyState === "loading") {
+      document.addEventListener("DOMContentLoaded", callback, { once: true });
       return;
-    }}
+    }
     callback();
-  }}
+  }
 
-  function readStoredOrder() {{
-    try {{
-      var value = window.localStorage.getItem(STORAGE_KEY);
-      var parsed = value ? JSON.parse(value) : [];
-      return Array.isArray(parsed) ? parsed.filter(function(item) {{ return typeof item === "string" && item; }}) : [];
-    }} catch (error) {{
-      return [];
-    }}
-  }}
-
-  function writeStoredOrder(order) {{
-    try {{
-      window.localStorage.setItem(STORAGE_KEY, JSON.stringify(order));
-    }} catch (error) {{}}
-  }}
-
-  function clearStoredOrder() {{
-    try {{
-      window.localStorage.removeItem(STORAGE_KEY);
-    }} catch (error) {{}}
-  }}
-
-  ready(function() {{
-    var panel = document.querySelector("[data-section-order-panel]");
-    if (!panel || panel.dataset.ready === "1") {{
-      return;
-    }}
-    panel.dataset.ready = "1";
-    var list = panel.querySelector("[data-section-order-list]");
-    var saveButton = panel.querySelector("[data-section-order-save]");
-    var resetButton = panel.querySelector("[data-section-order-reset]");
+  ready(function() {
+    var tabs = document.querySelector("[data-dashboard-page-tabs]");
+    if (!tabs || tabs.dataset.ready === "1") return;
+    tabs.dataset.ready = "1";
     var sections = Array.prototype.slice.call(document.querySelectorAll("details.dashboard-section.section-collapsible"));
-    if (!list || !sections.length) {{
-      return;
-    }}
+    if (!sections.length) return;
 
-    function getTitle(section) {{
+    function titleFor(section) {
       var title = section.querySelector(".section-title");
       return title ? title.textContent.replace(/\\s+/g, " ").trim() : "";
-    }}
+    }
 
-    var defaultTitles = sections.map(getTitle).filter(Boolean);
+    function keyFor(title) {
+      return title.replace(/\\s+/g, "-").replace(/[^\\w\\u4e00-\\u9fff-]+/g, "-");
+    }
 
-    function indexIn(order, title) {{
-      var storedIndex = order.indexOf(title);
-      if (storedIndex >= 0) {{
-        return storedIndex;
-      }}
-      var defaultIndex = defaultTitles.indexOf(title);
-      return order.length + (defaultIndex >= 0 ? defaultIndex : defaultTitles.length);
-    }}
+    function setActive(targetKey) {
+      var showAll = targetKey === "all";
+      tabs.querySelectorAll("[data-dashboard-page]").forEach(function(button) {
+        var active = button.dataset.dashboardPage === targetKey;
+        button.classList.toggle("is-active", active);
+        button.setAttribute("aria-selected", active ? "true" : "false");
+      });
+      sections.forEach(function(section) {
+        var title = titleFor(section);
+        var active = showAll || keyFor(title) === targetKey;
+        section.hidden = !active;
+        if (active && !section.open) section.open = true;
+      });
+      try {
+        window.localStorage.setItem("trade-tracker-active-page-v1", targetKey);
+      } catch (error) {}
+    }
 
-    function sortSections(order) {{
-      return sections.slice().sort(function(a, b) {{
-        var titleA = getTitle(a);
-        var titleB = getTitle(b);
-        return indexIn(order, titleA) - indexIn(order, titleB);
-      }});
-    }}
+    function addButton(label, key) {
+      var button = document.createElement("button");
+      button.type = "button";
+      button.className = "dashboard-page-tab";
+      button.dataset.dashboardPage = key;
+      button.setAttribute("role", "tab");
+      button.setAttribute("aria-selected", "false");
+      button.textContent = label;
+      button.addEventListener("click", function() {
+        setActive(key);
+        tabs.scrollIntoView({ block: "nearest", behavior: "smooth" });
+      });
+      tabs.appendChild(button);
+    }
 
-    function sectionInsertionAnchor() {{
-      var anchor = panel;
-      var next = panel.nextElementSibling;
-      while (next && !next.matches("details.dashboard-section.section-collapsible")) {{
-        anchor = next;
-        next = next.nextElementSibling;
-      }}
-      return anchor;
-    }}
+    sections.forEach(function(section) {
+      var title = titleFor(section);
+      if (title) addButton(title, keyFor(title));
+    });
+    addButton("全部", "all");
 
-    function applyOrder(order) {{
-      var anchor = sectionInsertionAnchor();
-      sortSections(order).forEach(function(section) {{
-        anchor.insertAdjacentElement("afterend", section);
-        anchor = section;
-      }});
-    }}
-
-    function currentListOrder() {{
-      return Array.prototype.slice.call(list.querySelectorAll("[data-section-title]"))
-        .map(function(item) {{ return item.dataset.sectionTitle || ""; }})
-        .filter(Boolean);
-    }}
-
-    function renderList(order) {{
-      list.textContent = "";
-      sortSections(order).forEach(function(section) {{
-        var title = getTitle(section);
-        if (!title) {{
-          return;
-        }}
-        var item = document.createElement("li");
-        var grip = document.createElement("span");
-        var label = document.createElement("span");
-        item.className = "section-order-item";
-        item.draggable = true;
-        item.dataset.sectionTitle = title;
-        item.setAttribute("aria-label", title);
-        grip.className = "section-order-grip";
-        grip.setAttribute("aria-hidden", "true");
-        grip.textContent = "::";
-        label.className = "section-order-label";
-        label.textContent = title;
-        item.appendChild(grip);
-        item.appendChild(label);
-        list.appendChild(item);
-      }});
-    }}
-
-    var storedOrder = readStoredOrder();
-    if (storedOrder.length) {{
-      applyOrder(storedOrder);
-    }}
-    renderList(storedOrder);
-
-    function moveDraggingItem(event, draggingItem, target) {{
-      if (!draggingItem || !target || target === draggingItem) {{
-        return;
-      }}
-      var rect = target.getBoundingClientRect();
-      var afterX = event.clientX > rect.left + rect.width / 2;
-      var afterY = event.clientY > rect.top + rect.height / 2;
-      var sameRow = Math.abs(event.clientY - (rect.top + rect.height / 2)) < rect.height * 0.55;
-      var insertAfter = sameRow ? afterX : afterY;
-      list.insertBefore(draggingItem, insertAfter ? target.nextSibling : target);
-    }}
-
-    var dragging = null;
-    list.addEventListener("dragstart", function(event) {{
-      var item = event.target.closest(".section-order-item");
-      if (!item) {{
-        return;
-      }}
-      dragging = item;
-      item.classList.add("is-dragging");
-      if (event.dataTransfer) {{
-        event.dataTransfer.effectAllowed = "move";
-        event.dataTransfer.setData("text/plain", item.dataset.sectionTitle || "");
-      }}
-    }});
-
-    list.addEventListener("dragend", function() {{
-      if (dragging) {{
-        dragging.classList.remove("is-dragging");
-      }}
-      dragging = null;
-    }});
-
-    list.addEventListener("dragover", function(event) {{
-      var target = event.target.closest(".section-order-item");
-      if (!dragging || !target || target === dragging) {{
-        return;
-      }}
-      event.preventDefault();
-      moveDraggingItem(event, dragging, target);
-    }});
-
-    var pointerDragging = null;
-    var pointerId = null;
-    list.addEventListener("pointerdown", function(event) {{
-      var item = event.target.closest(".section-order-item");
-      if (!item || event.button !== 0) {{
-        return;
-      }}
-      pointerDragging = item;
-      pointerId = event.pointerId;
-      item.classList.add("is-dragging");
-      if (item.setPointerCapture) {{
-        item.setPointerCapture(event.pointerId);
-      }}
-      event.preventDefault();
-    }});
-
-    list.addEventListener("pointermove", function(event) {{
-      if (!pointerDragging || event.pointerId !== pointerId) {{
-        return;
-      }}
-      var element = document.elementFromPoint(event.clientX, event.clientY);
-      var target = element ? element.closest(".section-order-item") : null;
-      if (target && list.contains(target)) {{
-        moveDraggingItem(event, pointerDragging, target);
-      }}
-      event.preventDefault();
-    }});
-
-    function finishPointerDrag(event) {{
-      if (!pointerDragging || event.pointerId !== pointerId) {{
-        return;
-      }}
-      if (pointerDragging.releasePointerCapture) {{
-        try {{
-          pointerDragging.releasePointerCapture(event.pointerId);
-        }} catch (error) {{}}
-      }}
-      pointerDragging.classList.remove("is-dragging");
-      pointerDragging = null;
-      pointerId = null;
-    }}
-
-    list.addEventListener("pointerup", finishPointerDrag);
-    list.addEventListener("pointercancel", finishPointerDrag);
-
-    if (saveButton) {{
-      saveButton.addEventListener("click", function() {{
-        var order = currentListOrder();
-        writeStoredOrder(order);
-        applyOrder(order);
-        window.location.reload();
-      }});
-    }}
-
-    if (resetButton) {{
-      resetButton.addEventListener("click", function() {{
-        clearStoredOrder();
-        window.location.reload();
-      }});
-    }}
-  }});
-}})();
+    var stored = "";
+    try {
+      stored = window.localStorage.getItem("trade-tracker-active-page-v1") || "";
+    } catch (error) {}
+    var firstKey = sections[0] ? keyFor(titleFor(sections[0])) : "all";
+    var target = stored && (stored === "all" || tabs.querySelector('[data-dashboard-page="' + stored + '"]'))
+      ? stored
+      : firstKey;
+    setActive(target);
+  });
+})();
 </script>
 """
 
 
-def render_section_order_panel() -> str:
-    items = "\n".join(
-        f'        <li class="section-order-item" draggable="true" data-section-title="{html.escape(title)}">'
-        f'<span class="section-order-grip" aria-hidden="true">::</span>'
-        f'<span class="section-order-label">{html.escape(title)}</span></li>'
-        for title in SECTION_ORDER
-    )
-    return f"""
-<section class="section-order-panel" data-section-order-panel aria-label="栏目顺序">
-  <div class="section-order-head">
-    <div>
-      <h2 class="section-order-title">栏目顺序</h2>
-      <p class="section-order-subtitle">本机保存</p>
-    </div>
-    <div class="section-order-actions">
-      <button type="button" class="section-order-reset" data-section-order-reset>恢复默认</button>
-      <button type="button" class="section-order-save" data-section-order-save>确定并刷新</button>
-    </div>
-  </div>
-  <ol class="section-order-list" data-section-order-list>
-{items}
-  </ol>
-</section>
-{SECTION_ORDER_PANEL_SCRIPT}
-"""
-
-
-def insert_section_order_panel(html_text: str) -> str:
-    if SECTION_ORDER_PANEL_MARKER in html_text:
+def insert_dashboard_page_tabs(html_text: str) -> str:
+    if DASHBOARD_PAGER_MARKER in html_text:
         return html_text
 
-    refresh_panel = re.search(r'\s*<section class="refresh-panel" id="refresh-panel"', html_text)
-    if refresh_panel:
-        panel = render_section_order_panel()
-        insert_at = refresh_panel.start()
-        return html_text[:insert_at] + "\n" + panel + html_text[insert_at:]
-
     first_section = DETAILS_PATTERN.search(html_text)
-    if first_section:
-        panel = render_section_order_panel()
-        return html_text[: first_section.start()] + panel + html_text[first_section.start() :]
-    return html_text
+    if not first_section:
+        return html_text
+    tabs = DASHBOARD_PAGER_HTML + DASHBOARD_PAGER_SCRIPT
+    anchors = [
+        html_text.find('id="refresh-panel"'),
+        first_section.start(),
+    ]
+    insert_at = min(index for index in anchors if index >= 0)
+    tag_start = html_text.rfind("<", 0, insert_at)
+    if tag_start >= 0:
+        insert_at = tag_start
+    return html_text[:insert_at] + tabs + html_text[insert_at:]
 
 
 def value_tone_class(text: str) -> str:

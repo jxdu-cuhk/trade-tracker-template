@@ -11,7 +11,7 @@ sys.path.insert(0, str(TOOLS_DIR))
 from trade_tracker.dashboard_layout import (
     apply_tonghuashun_curve_style,
     collapse_secondary_sections,
-    insert_section_order_panel,
+    insert_dashboard_page_tabs,
     reorder_dashboard_sections,
 )
 
@@ -59,26 +59,29 @@ class DashboardLayoutTests(unittest.TestCase):
         positions = [updated.index(f"<h2 class=\"section-title\">{title}</h2>") for title in titles]
         self.assertEqual(positions, sorted(positions))
 
-    def test_insert_section_order_panel_before_dashboard_sections(self):
+    def test_insert_dashboard_page_tabs_before_dashboard_sections(self):
+        html = "<main>" + section("当前持仓") + section("总收益曲线") + "</main>"
+
+        updated = insert_dashboard_page_tabs(html)
+        updated_again = insert_dashboard_page_tabs(updated)
+
+        self.assertIn("data-dashboard-page-tabs", updated)
+        self.assertIn("trade-tracker-active-page-v1", updated)
+        self.assertIn("setupDashboardPager", updated)
+        self.assertLess(updated.index("data-dashboard-page-tabs"), updated.index('<h2 class="section-title">当前持仓</h2>'))
+        self.assertEqual(updated, updated_again)
+
+    def test_insert_dashboard_page_tabs_before_refresh_panel(self):
         html = (
             "<main>"
-            + section("当前持仓").replace(" open>", ">")
-            + section("未平仓期权").replace(" open>", ">")
-            + section("总收益曲线").replace(" open>", ">")
+            '<section class="refresh-panel" id="refresh-panel"></section>'
+            + section("当前持仓")
             + "</main>"
         )
 
-        updated = insert_section_order_panel(html)
-        updated_again = insert_section_order_panel(updated)
+        updated = insert_dashboard_page_tabs(html)
 
-        self.assertIn("data-section-order-panel", updated)
-        self.assertIn("data-section-order-list", updated)
-        self.assertIn("data-section-order-save", updated)
-        self.assertIn("data-section-order-reset", updated)
-        self.assertIn("trade-tracker-section-order-v1", updated)
-        self.assertIn('draggable="true" data-section-title="当前持仓"', updated)
-        self.assertLess(updated.index("data-section-order-panel"), updated.index('<h2 class="section-title">当前持仓</h2>'))
-        self.assertEqual(updated, updated_again)
+        self.assertLess(updated.index("data-dashboard-page-tabs"), updated.index('id="refresh-panel"'))
 
     def test_apply_tonghuashun_curve_style_inserts_local_benchmark_shell(self):
         html = (

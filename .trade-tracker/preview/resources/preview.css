@@ -2024,134 +2024,55 @@ details[data-ths-return-curve] .ths-curve-bars div:nth-child(2) strong {
   font-size: 11px;
 }
 
-.section-order-panel {
+.dashboard-page-tabs {
+  position: sticky;
+  top: 0;
+  z-index: 5;
+  display: flex;
+  flex-wrap: wrap;
+  gap: 8px;
+  align-items: center;
   margin: 0 0 14px;
   border: 1px solid #edf0f2;
   border-radius: 16px;
-  background: #ffffff;
-  padding: 16px;
+  background: rgba(255, 255, 255, 0.94);
+  padding: 10px;
+  backdrop-filter: blur(12px);
   box-shadow: 0 12px 28px rgba(60, 64, 67, 0.05);
 }
 
-.section-order-head {
-  display: flex;
-  align-items: center;
-  justify-content: space-between;
-  gap: 14px;
-  margin-bottom: 12px;
-}
-
-.section-order-title {
-  margin: 0;
-  color: #202124;
-  font-size: 17px;
-  line-height: 1.25;
-  font-weight: 900;
-}
-
-.section-order-subtitle {
-  margin: 3px 0 0;
-  color: #9aa0a6;
-  font-size: 12px;
-  font-weight: 800;
-}
-
-.section-order-actions {
-  display: inline-flex;
-  align-items: center;
-  gap: 8px;
-}
-
-.section-order-save,
-.section-order-reset {
+.dashboard-page-tab {
   appearance: none;
   min-height: 34px;
+  border: 1px solid #e2e7ea;
   border-radius: 999px;
+  background: #f8fafb;
+  color: #59646b;
   cursor: pointer;
   font: inherit;
-  font-size: 12px;
-  font-weight: 900;
+  font-size: 13px;
+  font-weight: 850;
   padding: 0 14px;
   white-space: nowrap;
 }
 
-.section-order-save {
-  border: 0;
-  background: #ff2f45;
-  color: #ffffff;
-  box-shadow: 0 8px 18px rgba(255, 47, 69, 0.18);
+.dashboard-page-tab:hover,
+.dashboard-page-tab:focus-visible {
+  border-color: #ff9aa5;
+  background: #fff5f6;
+  color: #ff2f45;
 }
 
-.section-order-reset {
-  border: 1px solid #e5e9ec;
-  background: #f7f8f9;
-  color: #6f7a80;
-}
-
-.section-order-save:hover,
-.section-order-save:focus-visible {
-  background: #f5223a;
-}
-
-.section-order-reset:hover,
-.section-order-reset:focus-visible {
-  border-color: #d9dee2;
-  background: #ffffff;
-  color: #3c4043;
-}
-
-.section-order-save:focus-visible,
-.section-order-reset:focus-visible {
-  outline: 2px solid rgba(255, 47, 69, 0.22);
+.dashboard-page-tab:focus-visible {
+  outline: 2px solid rgba(255, 47, 69, 0.18);
   outline-offset: 2px;
 }
 
-.section-order-list {
-  display: flex;
-  flex-wrap: wrap;
-  gap: 8px;
-  margin: 0;
-  padding: 0;
-  list-style: none;
-}
-
-.section-order-item {
-  display: inline-flex;
-  min-height: 36px;
-  min-width: 136px;
-  align-items: center;
-  gap: 8px;
-  border: 1px solid #e8edf0;
-  border-radius: 10px;
-  background: #f8fafb;
-  color: #303134;
-  cursor: grab;
-  font-size: 13px;
-  font-weight: 850;
-  padding: 0 12px;
-  touch-action: none;
-  user-select: none;
-}
-
-.section-order-item:active {
-  cursor: grabbing;
-}
-
-.section-order-item.is-dragging {
-  opacity: 0.58;
-  transform: scale(0.985);
-}
-
-.section-order-grip {
-  color: #b6bec5;
-  font-size: 13px;
-  letter-spacing: -0.14em;
-}
-
-.section-order-label {
-  overflow: hidden;
-  text-overflow: ellipsis;
-  white-space: nowrap;
+.dashboard-page-tab.is-active {
+  border-color: #ff2f45;
+  background: #ff2f45;
+  color: #ffffff;
+  box-shadow: 0 8px 18px rgba(255, 47, 69, 0.16);
 }
 
 .performance-report-shell {
@@ -2843,27 +2764,14 @@ details[data-ths-return-curve] .ths-curve-bars div:nth-child(2) strong {
     align-items: flex-start;
   }
 
-  .section-order-head {
-    align-items: flex-start;
-    flex-direction: column;
+  .dashboard-page-tabs {
+    position: static;
+    padding: 8px;
   }
 
-  .section-order-actions {
-    width: 100%;
-  }
-
-  .section-order-save,
-  .section-order-reset {
-    flex: 1;
-  }
-
-  .section-order-list {
-    display: grid;
-    grid-template-columns: 1fr;
-  }
-
-  .section-order-item {
-    min-width: 0;
+  .dashboard-page-tab {
+    flex: 1 1 calc(50% - 8px);
+    padding-inline: 10px;
   }
 
   .metric-card-hero,
@@ -2987,7 +2895,7 @@ details[data-ths-return-curve] .ths-curve-bars div:nth-child(2) strong {
 
 .summary-wrap .summary-table {
   width: max-content;
-  min-width: 0;
+  min-width: 100%;
 }
 
 .summary-wrap .summary-table.fit-width {
