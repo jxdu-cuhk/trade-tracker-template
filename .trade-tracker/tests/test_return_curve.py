@@ -85,7 +85,7 @@ class ReturnCurveTests(unittest.TestCase):
     def test_curve_payload_collapses_same_day_to_last_point(self):
         with (
             patch("trade_tracker.return_curve.current_fx_rates_to_cny", return_value={"人民币": 1.0}),
-            patch("trade_tracker.return_curve.fetch_benchmark_points", return_value=[]),
+            patch("trade_tracker.return_curve.fetch_benchmark_payloads", return_value=[]),
         ):
             payload = curve_payload(
                 [
@@ -107,9 +107,19 @@ class ReturnCurveTests(unittest.TestCase):
 
     def test_render_curve_has_clickable_ranges_and_local_json(self):
         benchmark_points = [{"date": "2026/05/07", "iso": "2026-05-07", "serial": 46149, "close": 100}]
+        benchmark_payloads = [
+            {
+                "id": item["id"],
+                "market": item["market"],
+                "label": item["label"],
+                "shortLabel": item.get("short_label") or item["label"],
+                "points": benchmark_points,
+            }
+            for item in return_curve_module.BENCHMARKS
+        ]
         with (
             patch("trade_tracker.return_curve.current_fx_rates_to_cny", return_value={"人民币": 1.0}),
-            patch("trade_tracker.return_curve.fetch_benchmark_points", return_value=benchmark_points),
+            patch("trade_tracker.return_curve.fetch_benchmark_payloads", return_value=benchmark_payloads),
         ):
             html = render_tonghuashun_curve_panels(
                 [
@@ -416,6 +426,36 @@ class ReturnCurveTests(unittest.TestCase):
             "2026-05-08",
         )
 
+    def test_same_day_tail_request_uses_realtime_without_history_fetch(self):
+        today_iso = date.today().isoformat()
+        previous_iso = (date.today() - timedelta(days=1)).isoformat()
+        cache = {
+            "version": return_curve_module.BENCHMARK_CACHE_VERSION,
+            "benchmarks": {
+                "1.000001": {
+                    "fetched_at": previous_iso,
+                    "checked_end_iso": previous_iso,
+                    "points": [{"date": previous_iso.replace("-", "/"), "iso": previous_iso, "serial": 46155, "close": 100}],
+                }
+            },
+        }
+        request = return_curve_module.prepare_benchmark_cache_request(
+            cache,
+            return_curve_module.benchmark_definition("1.000001"),
+            previous_iso,
+            today_iso,
+        )
+        realtime_point = {"date": today_iso.replace("-", "/"), "iso": today_iso, "serial": 46156, "close": 102}
+        with (
+            patch.object(return_curve_module, "fetch_tencent_realtime_benchmark_point", return_value=realtime_point) as fetch_realtime,
+            patch.object(return_curve_module, "fetch_benchmark_points_online", return_value=[]) as fetch_online,
+        ):
+            fetched = return_curve_module.fetch_benchmark_request_online(request or {})
+
+        self.assertEqual(fetched, [realtime_point])
+        fetch_realtime.assert_called_once_with("sh000001", today_iso)
+        fetch_online.assert_not_called()
+
     def test_fetch_benchmark_points_does_not_skip_today_tail_after_yesterday_check(self):
         today_iso = date.today().isoformat()
         previous_iso = (date.today() - timedelta(days=1)).isoformat()
@@ -441,16 +481,54 @@ class ReturnCurveTests(unittest.TestCase):
 
             with (
                 patch.object(return_curve_module, "BENCHMARK_CACHE_PATH", cache_path),
-                patch.object(return_curve_module, "fetch_benchmark_points_online", return_value=online_points) as fetch_online,
+                patch.object(return_curve_module, "fetch_tencent_realtime_benchmark_point", return_value=online_points[0]) as fetch_realtime,
+                patch.object(return_curve_module, "fetch_benchmark_points_online", return_value=[]) as fetch_online,
             ):
                 points = return_curve_module.fetch_benchmark_points("1.000001", previous_iso, today_iso)
 
         self.assertEqual([point["iso"] for point in points], [previous_iso, today_iso])
-        fetch_online.assert_called_once_with(
+        fetch_realtime.assert_called_once_with("sh000001", today_iso)
+        fetch_online.assert_not_called()
+
+    def test_fetch_benchmark_payloads_reads_warm_cache_without_online_calls(self):
+        benchmarks = [
             return_curve_module.benchmark_definition("1.000001"),
-            today_iso,
-            today_iso,
-        )
+            return_curve_module.benchmark_definition("sp500"),
+        ]
+        points = [{"date": "2026/05/07", "iso": "2026-05-07", "serial": 46149, "close": 100}]
+        with tempfile.TemporaryDirectory() as temp_dir:
+            cache_path = Path(temp_dir) / "benchmark_history.json"
+            cache_path.write_text(
+                json.dumps(
+                    {
+                        "version": return_curve_module.BENCHMARK_CACHE_VERSION,
+                        "benchmarks": {
+                            "1.000001": {
+                                "fetched_at": date.today().isoformat(),
+                                "checked_end_iso": "2026-05-07",
+                                "points": points,
+                            },
+                            "^GSPC": {
+                                "fetched_at": date.today().isoformat(),
+                                "checked_end_iso": "2026-05-07",
+                                "points": points,
+                            },
+                        },
+                    }
+                ),
+                encoding="utf-8",
+            )
+
+            with (
+                patch.object(return_curve_module, "BENCHMARK_CACHE_PATH", cache_path),
+                patch.object(return_curve_module, "BENCHMARKS", benchmarks),
+                patch.object(return_curve_module, "fetch_benchmark_points_online", return_value=[]) as fetch_online,
+            ):
+                payloads = return_curve_module.fetch_benchmark_payloads("2026-05-01", "2026-05-07")
+
+        self.assertEqual([payload["label"] for payload in payloads], ["上证指数", "标普500"])
+        self.assertEqual([payload["points"][0]["close"] for payload in payloads], [100, 100])
+        fetch_online.assert_not_called()
 
     def test_fetch_benchmark_points_online_uses_yahoo_for_us_index(self):
         yahoo_points = [{"date": "2026/05/07", "iso": "2026-05-07", "serial": 46149, "close": 5100.5}]

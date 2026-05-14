@@ -107,9 +107,21 @@ def load_benchmark_cache() -> dict[str, object]:
 def save_benchmark_cache(payload: dict[str, object]) -> None:
     try:
         BENCHMARK_CACHE_PATH.parent.mkdir(parents=True, exist_ok=True)
-        BENCHMARK_CACHE_PATH.write_text(json.dumps(payload, ensure_ascii=False, indent=2), encoding="utf-8")
+        BENCHMARK_CACHE_PATH.write_text(json.dumps(payload, ensure_ascii=False, separators=(",", ":")), encoding="utf-8")
     except OSError:
         return
+
+
+def benchmark_cache_sections(cache: dict[str, object]) -> tuple[dict[str, object], dict[str, object]]:
+    ranges = cache.get("ranges")
+    if not isinstance(ranges, dict):
+        ranges = {}
+        cache["ranges"] = ranges
+    benchmark_entries = cache.get("benchmarks")
+    if not isinstance(benchmark_entries, dict):
+        benchmark_entries = {}
+        cache["benchmarks"] = benchmark_entries
+    return ranges, benchmark_entries
 
 
 def cache_entry_points(entry: object) -> list[dict[str, object]]:
@@ -229,6 +241,14 @@ def seed_benchmark_checked_end_from_ranges(ranges: dict[str, object], cache_id: 
         if checked_end:
             checked_ends.append(checked_end)
     return max(checked_ends) if checked_ends else ""
+
+
+def prune_benchmark_range_cache(ranges: dict[str, object], cache_id: str) -> bool:
+    prefix = f"{cache_id}|"
+    keys = [key for key in ranges if clean_text(key).startswith(prefix)]
+    for key in keys:
+        ranges.pop(key, None)
+    return bool(keys)
 
 
 def serialize_benchmark_points(points: list[dict[str, object]]) -> list[dict[str, object]]:
@@ -506,30 +526,47 @@ def fetch_benchmark_points_online(identifier: object, start_iso: str, end_iso: s
 
 
 def fetch_benchmark_points(identifier: object, start_iso: str, end_iso: str) -> list[dict[str, object]]:
-    benchmark = benchmark_definition(identifier)
+    cache = load_benchmark_cache()
+    request = prepare_benchmark_cache_request(cache, benchmark_definition(identifier), start_iso, end_iso)
+    if not request:
+        return []
+    if request.get("hit"):
+        if request.get("changed"):
+            save_benchmark_cache(cache)
+        return list(request.get("points") or [])
+
+    fetched = fetch_benchmark_request_online(request)
+    points, changed = apply_benchmark_cache_fetch_result(cache, request, fetched)
+    if changed:
+        save_benchmark_cache(cache)
+    return points
+
+
+def prepare_benchmark_cache_request(
+    cache: dict[str, object],
+    benchmark: dict[str, object],
+    start_iso: str,
+    end_iso: str,
+) -> dict[str, object] | None:
+    benchmark = benchmark_definition(benchmark)
     start_iso = effective_benchmark_start_iso(benchmark, start_iso)
     cache_id = benchmark_cache_identifier(benchmark)
     if not cache_id or not start_iso or not end_iso:
-        return []
+        return None
     try:
         start = date.fromisoformat(start_iso)
         end = date.fromisoformat(end_iso)
     except ValueError:
-        return []
+        return None
     if end < start:
-        return []
-    cache = load_benchmark_cache()
-    ranges = cache.get("ranges")
-    if not isinstance(ranges, dict):
-        ranges = {}
-        cache["ranges"] = ranges
-    benchmark_entries = cache.get("benchmarks")
-    if not isinstance(benchmark_entries, dict):
-        benchmark_entries = {}
-        cache["benchmarks"] = benchmark_entries
+        return None
 
+    ranges, benchmark_entries = benchmark_cache_sections(cache)
     entry = benchmark_entries.get(cache_id)
     cached_points = cache_entry_points(entry)
+    changed = False
+    if cached_points:
+        changed = prune_benchmark_range_cache(ranges, cache_id) or changed
     if not cached_points:
         cached_points = seed_benchmark_points_from_ranges(ranges, cache_id)
         if cached_points:
@@ -540,8 +577,14 @@ def fetch_benchmark_points(identifier: object, start_iso: str, end_iso: str) -> 
                 "points": serialize_benchmark_points(cached_points),
             }
             benchmark_entries[cache_id] = entry
+            changed = prune_benchmark_range_cache(ranges, cache_id) or changed
+            changed = True
     if benchmark_entry_covers(entry, cached_points, start_iso, end_iso, require_start=requires_start_coverage(benchmark)):
-        return slice_benchmark_points(cached_points, start_iso, end_iso)
+        return {
+            "hit": True,
+            "changed": changed,
+            "points": slice_benchmark_points(cached_points, start_iso, end_iso),
+        }
 
     fetch_ranges: list[tuple[date, date]] = []
     if not cached_points:
@@ -554,13 +597,50 @@ def fetch_benchmark_points(identifier: object, start_iso: str, end_iso: str) -> 
         if end > last_cached and not cache_entry_checked_through(entry, end_iso):
             fetch_ranges.append((last_cached + timedelta(days=1), end))
 
+    return {
+        "hit": False,
+        "changed": changed,
+        "benchmark": benchmark,
+        "cache_id": cache_id,
+        "start_iso": start_iso,
+        "end_iso": end_iso,
+        "cached_points": cached_points,
+        "fetch_ranges": fetch_ranges,
+    }
+
+
+def fetch_benchmark_request_online(request: dict[str, object]) -> list[dict[str, object]]:
+    benchmark = request.get("benchmark")
+    if not isinstance(benchmark, dict):
+        return []
     fetched: list[dict[str, object]] = []
-    for range_start, range_end in fetch_ranges:
-        if range_end < range_start:
+    for range_start, range_end in list(request.get("fetch_ranges") or []):
+        if not isinstance(range_start, date) or not isinstance(range_end, date) or range_end < range_start:
+            continue
+        if range_start == range_end == date.today():
+            tencent_symbol = clean_text(benchmark.get("tencent")) or benchmark_tencent_symbol(clean_text(benchmark.get("secid")))
+            realtime_point = fetch_tencent_realtime_benchmark_point(tencent_symbol, range_end.isoformat())
+            if realtime_point:
+                fetched.append(realtime_point)
             continue
         fetched.extend(fetch_benchmark_points_online(benchmark, range_start.isoformat(), range_end.isoformat()))
+    return fetched
 
+
+def apply_benchmark_cache_fetch_result(
+    cache: dict[str, object],
+    request: dict[str, object],
+    fetched: list[dict[str, object]],
+) -> tuple[list[dict[str, object]], bool]:
+    cache_id = clean_text(request.get("cache_id"))
+    start_iso = clean_text(request.get("start_iso"))
+    end_iso = clean_text(request.get("end_iso"))
+    cached_points = list(request.get("cached_points") or [])
+    changed = bool(request.get("changed"))
+    if not cache_id or not start_iso or not end_iso:
+        return [], changed
     if fetched or cached_points:
+        ranges, benchmark_entries = benchmark_cache_sections(cache)
         merged = merge_benchmark_points(cached_points, fetched)
         benchmark_entries[cache_id] = {
             "id": cache_id,
@@ -568,43 +648,60 @@ def fetch_benchmark_points(identifier: object, start_iso: str, end_iso: str) -> 
             "checked_end_iso": end_iso,
             "points": serialize_benchmark_points(merged),
         }
-        range_key = benchmark_cache_key(cache_id, start_iso, end_iso)
-        ranges[range_key] = {
-            "fetched_at": date.today().isoformat(),
-            "checked_end_iso": end_iso,
-            "points": serialize_benchmark_points(slice_benchmark_points(merged, start_iso, end_iso)),
-        }
-        save_benchmark_cache(cache)
-        return slice_benchmark_points(merged, start_iso, end_iso)
-
-    return []
+        prune_benchmark_range_cache(ranges, cache_id)
+        return slice_benchmark_points(merged, start_iso, end_iso), True
+    return [], changed
 
 
 def fetch_benchmark_payloads(start_iso: str, end_iso: str) -> list[dict[str, object]]:
     if not start_iso or not end_iso:
         return []
     results: dict[str, list[dict[str, object]]] = {}
-    emit_progress("拉取指数基准", f"准备读取 {len(BENCHMARKS)} 个可切换指数基准。", 80)
-    workers = min(BENCHMARK_FETCH_WORKERS, len(BENCHMARKS))
-    with ThreadPoolExecutor(max_workers=workers) as executor:
-        future_map = {
-            executor.submit(fetch_benchmark_points, benchmark, start_iso, end_iso): benchmark
-            for benchmark in BENCHMARKS
-        }
-        completed = 0
-        for future in as_completed(future_map):
-            benchmark = future_map[future]
-            benchmark_id = clean_text(benchmark.get("id"))
-            try:
-                results[benchmark_id] = future.result()
-            except Exception:
-                results[benchmark_id] = []
-            completed += 1
-            emit_progress(
-                "拉取指数基准",
-                f"指数基准 {completed}/{len(BENCHMARKS)}：{clean_text(benchmark.get('short_label')) or clean_text(benchmark.get('label'))}",
-                80 + (completed / len(BENCHMARKS)) * 4,
-            )
+    cache = load_benchmark_cache()
+    requests: list[dict[str, object]] = []
+    cache_changed = False
+    for benchmark in BENCHMARKS:
+        benchmark_id = clean_text(benchmark.get("id"))
+        request = prepare_benchmark_cache_request(cache, benchmark, start_iso, end_iso)
+        if not request:
+            results[benchmark_id] = []
+            continue
+        if request.get("hit"):
+            results[benchmark_id] = list(request.get("points") or [])
+            cache_changed = cache_changed or bool(request.get("changed"))
+        else:
+            requests.append(request)
+
+    if requests:
+        emit_progress("拉取指数基准", f"准备补齐 {len(requests)} 个指数基准缺口。", 80)
+        workers = min(BENCHMARK_FETCH_WORKERS, len(requests))
+        with ThreadPoolExecutor(max_workers=workers) as executor:
+            future_map = {
+                executor.submit(fetch_benchmark_request_online, request): request
+                for request in requests
+            }
+            completed = 0
+            for future in as_completed(future_map):
+                request = future_map[future]
+                benchmark = request.get("benchmark") if isinstance(request.get("benchmark"), dict) else {}
+                benchmark_id = clean_text(benchmark.get("id"))
+                try:
+                    fetched = future.result()
+                except Exception:
+                    fetched = []
+                points, changed = apply_benchmark_cache_fetch_result(cache, request, fetched)
+                results[benchmark_id] = points
+                cache_changed = cache_changed or changed
+                completed += 1
+                emit_progress(
+                    "拉取指数基准",
+                    f"指数基准 {completed}/{len(requests)}：{clean_text(benchmark.get('short_label')) or clean_text(benchmark.get('label'))}",
+                    80 + (completed / len(requests)) * 4,
+                )
+
+    if cache_changed:
+        save_benchmark_cache(cache)
+
     payloads = []
     for benchmark in BENCHMARKS:
         benchmark_id = clean_text(benchmark.get("id"))
