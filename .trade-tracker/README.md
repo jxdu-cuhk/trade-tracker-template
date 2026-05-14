@@ -29,7 +29,7 @@
 - `.trade-tracker/tools/trade_tracker/app.py`: 导出流程编排，负责加载核心模块、生成网页、整理输出。
 - `.trade-tracker/tools/trade_tracker/patcher.py`: 把持仓、汇总、行情、刷新面板等扩展挂到核心生成器上。
 - `.trade-tracker/tools/trade_tracker/dashboard_layout.py`: 顶部分页、栏目布局和总收益曲线控制区。
-- `.trade-tracker/tools/trade_tracker/return_curve.py`: 总收益曲线、baseline、超额收益、K 线、缩放拖动和 tooltip。
+- `.trade-tracker/tools/trade_tracker/return_curve.py`: 总收益曲线、baseline、超额收益、K 线、缩放拖动、tooltip，以及指数长期缓存和增量补尾。
 - `.trade-tracker/tools/trade_tracker/historical_curve.py`: 个股真实历史行情、缓存和未实现盈亏历史曲线。
 - `.trade-tracker/tools/trade_tracker/holdings_overview.py`: 当前持仓顶部汇总卡、当日/本月/近三月/本年已实现盈亏。
 - `.trade-tracker/tools/trade_tracker/reporting_currency.py`: 看板统一口径币种切换。
@@ -49,6 +49,6 @@
 说明：
 
 - `.trade-tracker/preview/` 里的内容会被刷新脚本重新生成，通常不用手动改。
-- `.trade-tracker/tools/cache/` 可以删除，刷新时会按需重建；保留它能明显减少行情请求。
+- `.trade-tracker/tools/cache/` 可以删除，刷新时会按需重建；保留它能明显减少行情请求。指数缓存现在按指数长期保存，日常刷新只补缺口和当天实时尾点；科创综指从 `2022-04-11` 起，用中证指数官方接口补腾讯缺失的早期历史。
 - `.trade-tracker/history/` 里的原始文件建议保留，后续补数据时还能继续用。
 - 如果看板没有更新，先直接刷新网页；如果后台服务没有响应，再双击 `Update Preview.command`。

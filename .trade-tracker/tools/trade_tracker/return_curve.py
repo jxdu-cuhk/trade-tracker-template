@@ -4,7 +4,7 @@ import html
 import json
 import re
 from concurrent.futures import ThreadPoolExecutor, as_completed
-from datetime import date
+from datetime import date, timedelta
 from urllib.error import URLError
 from urllib.parse import urlencode
 from urllib.request import Request, urlopen
@@ -49,9 +49,13 @@ BENCHMARKS = [
 ]
 COMBINED_BENCHMARK = BENCHMARKS[0]
 BENCHMARK_TIMEOUT = 8
+CSINDEX_BENCHMARK_TIMEOUT = 2
+TENCENT_REALTIME_TIMEOUT = 2
 BENCHMARK_CACHE_PATH = APP_DIR / "tools" / "cache" / "benchmark_history.json"
 BENCHMARK_CACHE_TTL_DAYS = 7
+BENCHMARK_CACHE_VERSION = 2
 BENCHMARK_FETCH_WORKERS = 12
+STAR_COMPOSITE_START_ISO = "2022-04-11"
 
 
 def date_iso(value: object) -> str:
@@ -93,7 +97,10 @@ def load_benchmark_cache() -> dict[str, object]:
     ranges = payload.get("ranges")
     if not isinstance(ranges, dict):
         payload["ranges"] = {}
-    payload["version"] = 1
+    benchmarks = payload.get("benchmarks")
+    if not isinstance(benchmarks, dict):
+        payload["benchmarks"] = {}
+    payload["version"] = BENCHMARK_CACHE_VERSION
     return payload
 
 
@@ -109,7 +116,131 @@ def cache_entry_points(entry: object) -> list[dict[str, object]]:
     if not isinstance(entry, dict):
         return []
     points = entry.get("points")
-    return list(points) if isinstance(points, list) else []
+    return sorted_benchmark_points(list(points) if isinstance(points, list) else [])
+
+
+def benchmark_point_from_cache(item: object) -> dict[str, object] | None:
+    if not isinstance(item, dict):
+        return None
+    iso = date_iso(item.get("iso") or item.get("date"))
+    close = parse_float(item.get("close"))
+    serial = parse_float(item.get("serial"))
+    if serial is None:
+        serial = excel_serial_from_iso(iso)
+    if not iso or close is None or close <= 0 or serial is None:
+        return None
+    return {
+        "date": date_label_from_iso(iso),
+        "iso": iso,
+        "serial": serial,
+        "close": float(close),
+    }
+
+
+def sorted_benchmark_points(points: list[dict[str, object]]) -> list[dict[str, object]]:
+    by_iso: dict[str, dict[str, object]] = {}
+    for item in points:
+        point = benchmark_point_from_cache(item)
+        if point:
+            by_iso[str(point["iso"])] = point
+    return [by_iso[iso] for iso in sorted(by_iso)]
+
+
+def slice_benchmark_points(points: list[dict[str, object]], start_iso: str, end_iso: str) -> list[dict[str, object]]:
+    return [point for point in sorted_benchmark_points(points) if start_iso <= str(point.get("iso")) <= end_iso]
+
+
+def merge_benchmark_points(existing: list[dict[str, object]], new_points: list[dict[str, object]]) -> list[dict[str, object]]:
+    return sorted_benchmark_points([*existing, *new_points])
+
+
+def cache_entry_checked_today(entry: object) -> bool:
+    if not isinstance(entry, dict):
+        return False
+    try:
+        fetched_at = date.fromisoformat(clean_text(entry.get("fetched_at")))
+    except ValueError:
+        return False
+    return fetched_at >= date.today()
+
+
+def cache_entry_checked_through(entry: object, end_iso: str) -> bool:
+    if not cache_entry_checked_today(entry):
+        return False
+    checked_end_iso = date_iso(entry.get("checked_end_iso")) if isinstance(entry, dict) else ""
+    return bool(checked_end_iso and checked_end_iso >= end_iso)
+
+
+def benchmark_entry_covers(
+    entry: object,
+    points: list[dict[str, object]],
+    start_iso: str,
+    end_iso: str,
+    *,
+    require_start: bool = False,
+) -> bool:
+    if not points:
+        return cache_entry_checked_through(entry, end_iso)
+    if str(points[0].get("iso")) > start_iso:
+        if require_start:
+            return False
+        return cache_entry_checked_through(entry, end_iso)
+    if str(points[-1].get("iso")) >= end_iso:
+        return True
+    return cache_entry_checked_through(entry, end_iso)
+
+
+def seed_benchmark_points_from_ranges(ranges: dict[str, object], cache_id: str) -> list[dict[str, object]]:
+    prefix = f"{cache_id}|"
+    seeded: list[dict[str, object]] = []
+    for key, entry in ranges.items():
+        if clean_text(key).startswith(prefix):
+            seeded.extend(cache_entry_points(entry))
+    return sorted_benchmark_points(seeded)
+
+
+def seed_benchmark_fetched_at_from_ranges(ranges: dict[str, object], cache_id: str) -> str:
+    prefix = f"{cache_id}|"
+    fetched_dates: list[date] = []
+    for key, entry in ranges.items():
+        if not clean_text(key).startswith(prefix) or not isinstance(entry, dict):
+            continue
+        try:
+            fetched_dates.append(date.fromisoformat(clean_text(entry.get("fetched_at"))))
+        except ValueError:
+            continue
+    return max(fetched_dates).isoformat() if fetched_dates else ""
+
+
+def seed_benchmark_checked_end_from_ranges(ranges: dict[str, object], cache_id: str) -> str:
+    prefix = f"{cache_id}|"
+    checked_ends: list[str] = []
+    for key, entry in ranges.items():
+        text = clean_text(key)
+        if not text.startswith(prefix):
+            continue
+        checked_end = date_iso(entry.get("checked_end_iso")) if isinstance(entry, dict) else ""
+        if not checked_end:
+            points = cache_entry_points(entry)
+            checked_end = clean_text(points[-1].get("iso")) if points else ""
+        if not checked_end:
+            parts = text.split("|")
+            checked_end = date_iso(parts[-1]) if len(parts) >= 3 else ""
+        if checked_end:
+            checked_ends.append(checked_end)
+    return max(checked_ends) if checked_ends else ""
+
+
+def serialize_benchmark_points(points: list[dict[str, object]]) -> list[dict[str, object]]:
+    return [
+        {
+            "date": point["date"],
+            "iso": point["iso"],
+            "serial": point["serial"],
+            "close": point["close"],
+        }
+        for point in sorted_benchmark_points(points)
+    ]
 
 
 def is_cache_entry_fresh(entry: object) -> bool:
@@ -131,6 +262,12 @@ def points_cover_start(points: list[dict[str, object]], start_iso: str) -> bool:
 
 def requires_start_coverage(benchmark: dict[str, object]) -> bool:
     return bool(clean_text(benchmark.get("csindex")))
+
+
+def effective_benchmark_start_iso(benchmark: dict[str, object], start_iso: str) -> str:
+    if clean_text(benchmark.get("id")) == "star" and start_iso and start_iso < STAR_COMPOSITE_START_ISO:
+        return STAR_COMPOSITE_START_ISO
+    return start_iso
 
 
 def benchmark_definition(identifier: object) -> dict[str, object]:
@@ -270,7 +407,7 @@ def fetch_csindex_benchmark_points(index_code: str, start_iso: str, end_iso: str
     url = "https://www.csindex.com.cn/csindex-home/perf/index-perf?" + urlencode(params)
     request = Request(url, headers={"User-Agent": "Mozilla/5.0"})
     try:
-        with urlopen(request, timeout=BENCHMARK_TIMEOUT) as response:
+        with urlopen(request, timeout=CSINDEX_BENCHMARK_TIMEOUT) as response:
             payload = json.loads(response.read().decode("utf-8", "ignore"))
     except (TimeoutError, URLError, OSError, ValueError):
         return []
@@ -297,55 +434,150 @@ def fetch_csindex_benchmark_points(index_code: str, start_iso: str, end_iso: str
     return sorted({clean_text(point["iso"]): point for point in points}.values(), key=lambda item: str(item["iso"]))
 
 
+def fetch_tencent_realtime_benchmark_point(symbol: str, target_iso: str) -> dict[str, object] | None:
+    symbol = clean_text(symbol)
+    if not symbol or target_iso != date.today().isoformat():
+        return None
+    url = f"https://qt.gtimg.cn/q={symbol}"
+    request = Request(url, headers={"User-Agent": "Mozilla/5.0"})
+    try:
+        with urlopen(request, timeout=TENCENT_REALTIME_TIMEOUT) as response:
+            text = response.read().decode("gb18030", "ignore")
+    except (TimeoutError, URLError, OSError, ValueError):
+        return None
+    match = re.search(r'v_[^=]+="([^"]*)"', text)
+    if not match:
+        return None
+    parts = match.group(1).split("~")
+    close = parse_float(parts[3] if len(parts) > 3 else None)
+    serial = excel_serial_from_iso(target_iso)
+    if close is None or close <= 0 or serial is None:
+        return None
+    return {
+        "date": date_label_from_iso(target_iso),
+        "iso": target_iso,
+        "serial": serial,
+        "close": float(close),
+    }
+
+
+def with_realtime_tail(
+    points: list[dict[str, object]],
+    benchmark: dict[str, object],
+    end_iso: str,
+) -> list[dict[str, object]]:
+    tencent_symbol = clean_text(benchmark.get("tencent")) or benchmark_tencent_symbol(clean_text(benchmark.get("secid")))
+    today_point = fetch_tencent_realtime_benchmark_point(tencent_symbol, end_iso)
+    if not today_point:
+        return sorted_benchmark_points(points)
+    return merge_benchmark_points(points, [today_point])
+
+
 def fetch_benchmark_points_online(identifier: object, start_iso: str, end_iso: str) -> list[dict[str, object]]:
     benchmark = benchmark_definition(identifier)
+    start_iso = effective_benchmark_start_iso(benchmark, start_iso)
     secid = clean_text(benchmark.get("secid"))
+    benchmark_id = clean_text(benchmark.get("id"))
+    csindex_code = clean_text(benchmark.get("csindex"))
     tencent_symbol = clean_text(benchmark.get("tencent")) or benchmark_tencent_symbol(secid)
     points = fetch_tencent_benchmark_points(tencent_symbol, start_iso, end_iso)
     if points:
-        csindex_code = clean_text(benchmark.get("csindex"))
         if csindex_code and not points_cover_start(points, start_iso):
             csindex_points = fetch_csindex_benchmark_points(csindex_code, start_iso, end_iso)
             if csindex_points:
-                return csindex_points
-        return points
+                return with_realtime_tail(csindex_points, benchmark, end_iso)
+            if benchmark_id == "star":
+                return []
+        return with_realtime_tail(points, benchmark, end_iso)
     yahoo_symbol = clean_text(benchmark.get("yahoo"))
     points = fetch_yahoo_benchmark_points(yahoo_symbol, start_iso, end_iso)
     if points:
         return points
-    points = fetch_csindex_benchmark_points(clean_text(benchmark.get("csindex")), start_iso, end_iso)
-    if points:
-        return points
+    if csindex_code:
+        points = fetch_csindex_benchmark_points(csindex_code, start_iso, end_iso)
+        if points:
+            return with_realtime_tail(points, benchmark, end_iso)
+        realtime_points = with_realtime_tail([], benchmark, end_iso)
+        if realtime_points and points_cover_start(realtime_points, start_iso):
+            return realtime_points
+        if benchmark_id == "star":
+            return []
     return fetch_eastmoney_benchmark_points(secid, start_iso, end_iso)
 
 
 def fetch_benchmark_points(identifier: object, start_iso: str, end_iso: str) -> list[dict[str, object]]:
     benchmark = benchmark_definition(identifier)
+    start_iso = effective_benchmark_start_iso(benchmark, start_iso)
     cache_id = benchmark_cache_identifier(benchmark)
     if not cache_id or not start_iso or not end_iso:
+        return []
+    try:
+        start = date.fromisoformat(start_iso)
+        end = date.fromisoformat(end_iso)
+    except ValueError:
+        return []
+    if end < start:
         return []
     cache = load_benchmark_cache()
     ranges = cache.get("ranges")
     if not isinstance(ranges, dict):
         ranges = {}
         cache["ranges"] = ranges
-    key = benchmark_cache_key(cache_id, start_iso, end_iso)
-    entry = ranges.get(key)
-    cached_points = cache_entry_points(entry)
-    if cached_points and is_cache_entry_fresh(entry) and (
-        not requires_start_coverage(benchmark) or points_cover_start(cached_points, start_iso)
-    ):
-        return cached_points
+    benchmark_entries = cache.get("benchmarks")
+    if not isinstance(benchmark_entries, dict):
+        benchmark_entries = {}
+        cache["benchmarks"] = benchmark_entries
 
-    points = fetch_benchmark_points_online(benchmark, start_iso, end_iso)
-    if points:
-        ranges[key] = {
+    entry = benchmark_entries.get(cache_id)
+    cached_points = cache_entry_points(entry)
+    if not cached_points:
+        cached_points = seed_benchmark_points_from_ranges(ranges, cache_id)
+        if cached_points:
+            entry = {
+                "id": cache_id,
+                "fetched_at": seed_benchmark_fetched_at_from_ranges(ranges, cache_id),
+                "checked_end_iso": seed_benchmark_checked_end_from_ranges(ranges, cache_id),
+                "points": serialize_benchmark_points(cached_points),
+            }
+            benchmark_entries[cache_id] = entry
+    if benchmark_entry_covers(entry, cached_points, start_iso, end_iso, require_start=requires_start_coverage(benchmark)):
+        return slice_benchmark_points(cached_points, start_iso, end_iso)
+
+    fetch_ranges: list[tuple[date, date]] = []
+    if not cached_points:
+        fetch_ranges.append((start, end))
+    else:
+        first_cached = date.fromisoformat(str(cached_points[0]["iso"]))
+        last_cached = date.fromisoformat(str(cached_points[-1]["iso"]))
+        if start < first_cached:
+            fetch_ranges.append((start, first_cached - timedelta(days=1)))
+        if end > last_cached and not cache_entry_checked_through(entry, end_iso):
+            fetch_ranges.append((last_cached + timedelta(days=1), end))
+
+    fetched: list[dict[str, object]] = []
+    for range_start, range_end in fetch_ranges:
+        if range_end < range_start:
+            continue
+        fetched.extend(fetch_benchmark_points_online(benchmark, range_start.isoformat(), range_end.isoformat()))
+
+    if fetched or cached_points:
+        merged = merge_benchmark_points(cached_points, fetched)
+        benchmark_entries[cache_id] = {
+            "id": cache_id,
             "fetched_at": date.today().isoformat(),
-            "points": points,
+            "checked_end_iso": end_iso,
+            "points": serialize_benchmark_points(merged),
+        }
+        range_key = benchmark_cache_key(cache_id, start_iso, end_iso)
+        ranges[range_key] = {
+            "fetched_at": date.today().isoformat(),
+            "checked_end_iso": end_iso,
+            "points": serialize_benchmark_points(slice_benchmark_points(merged, start_iso, end_iso)),
         }
         save_benchmark_cache(cache)
-        return points
-    return cached_points
+        return slice_benchmark_points(merged, start_iso, end_iso)
+
+    return []
 
 
 def fetch_benchmark_payloads(start_iso: str, end_iso: str) -> list[dict[str, object]]:

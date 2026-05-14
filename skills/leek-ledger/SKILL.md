@@ -81,6 +81,14 @@ When changing code or data logic, run focused tests before a full refresh:
 python3 -m unittest discover -s .trade-tracker/tests -v
 ```
 
+Benchmark and curve maintenance notes:
+
+- Total return baselines live in `.trade-tracker/tools/trade_tracker/return_curve.py`.
+- Index history should be cached by benchmark and reused across refreshes; do not refetch multi-year index history when only the latest tail date is missing.
+- For A-share baselines, prefer Tencent for normal history and real-time tail points. Do not make Eastmoney the primary dependency for 科创综指 because it is easy to block.
+- 科创综指 should clamp to its official available start, `2022-04-11`; use the official CSIndex endpoint with a short timeout to fill Tencent's early-history gap, then use Tencent real-time data for today's tail point.
+- After curve-source changes, update `README.md`, `.trade-tracker/README.md`, and this skill so operational rules stay aligned.
+
 ## Examples
 
 Example user input:

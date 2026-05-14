@@ -5,10 +5,10 @@ import re
 import sys
 import tempfile
 import unittest
-from datetime import date
+from datetime import date, timedelta
 from pathlib import Path
 from types import SimpleNamespace
-from unittest.mock import patch
+from unittest.mock import call, patch
 
 
 TOOLS_DIR = Path(__file__).resolve().parents[1] / "tools"
@@ -303,6 +303,7 @@ class ReturnCurveTests(unittest.TestCase):
         csindex_points = [{"date": "2022/04/11", "iso": "2022-04-11", "serial": 44662, "close": 1146.55}]
         with (
             patch.object(return_curve_module, "fetch_tencent_benchmark_points", return_value=tencent_points) as fetch_tencent,
+            patch.object(return_curve_module, "fetch_eastmoney_benchmark_points", return_value=[]) as fetch_eastmoney,
             patch.object(return_curve_module, "fetch_csindex_benchmark_points", return_value=csindex_points) as fetch_csindex,
         ):
             points = return_curve_module.fetch_benchmark_points_online("star", "2022-04-11", "2026-05-13")
@@ -310,6 +311,51 @@ class ReturnCurveTests(unittest.TestCase):
         self.assertEqual(points, csindex_points)
         fetch_tencent.assert_called_once_with("sh000680", "2022-04-11", "2026-05-13")
         fetch_csindex.assert_called_once_with("000680", "2022-04-11", "2026-05-13")
+        fetch_eastmoney.assert_not_called()
+
+    def test_fetch_benchmark_points_online_clamps_star_start_to_publish_history(self):
+        csindex_points = [{"date": "2022/04/11", "iso": "2022-04-11", "serial": 44662, "close": 1146.55}]
+        with (
+            patch.object(return_curve_module, "fetch_tencent_benchmark_points", return_value=[]) as fetch_tencent,
+            patch.object(return_curve_module, "fetch_yahoo_benchmark_points", return_value=[]),
+            patch.object(return_curve_module, "fetch_eastmoney_benchmark_points", return_value=[]) as fetch_eastmoney,
+            patch.object(return_curve_module, "fetch_csindex_benchmark_points", return_value=csindex_points) as fetch_csindex,
+        ):
+            points = return_curve_module.fetch_benchmark_points_online("star", "2020-01-01", "2026-05-13")
+
+        self.assertEqual(points, csindex_points)
+        fetch_tencent.assert_called_once_with("sh000680", "2022-04-11", "2026-05-13")
+        fetch_csindex.assert_called_once_with("000680", "2022-04-11", "2026-05-13")
+        fetch_eastmoney.assert_not_called()
+
+    def test_fetch_benchmark_points_online_appends_tencent_realtime_tail_for_today(self):
+        today_iso = date.today().isoformat()
+        previous_iso = (date.today() - timedelta(days=1)).isoformat()
+        history_points = [{"date": previous_iso.replace("-", "/"), "iso": previous_iso, "serial": 46155, "close": 100}]
+        realtime_point = {"date": today_iso.replace("-", "/"), "iso": today_iso, "serial": 46156, "close": 101}
+        with (
+            patch.object(return_curve_module, "fetch_tencent_benchmark_points", return_value=history_points),
+            patch.object(return_curve_module, "fetch_tencent_realtime_benchmark_point", return_value=realtime_point) as fetch_realtime,
+        ):
+            points = return_curve_module.fetch_benchmark_points_online("sse", previous_iso, today_iso)
+
+        self.assertEqual([point["iso"] for point in points], [previous_iso, today_iso])
+        fetch_realtime.assert_called_once_with("sh000001", today_iso)
+
+    def test_fetch_star_today_uses_realtime_tail_without_eastmoney(self):
+        today_iso = date.today().isoformat()
+        realtime_point = {"date": today_iso.replace("-", "/"), "iso": today_iso, "serial": 46156, "close": 2125.57}
+        with (
+            patch.object(return_curve_module, "fetch_tencent_benchmark_points", return_value=[]),
+            patch.object(return_curve_module, "fetch_yahoo_benchmark_points", return_value=[]),
+            patch.object(return_curve_module, "fetch_csindex_benchmark_points", return_value=[]),
+            patch.object(return_curve_module, "fetch_tencent_realtime_benchmark_point", return_value=realtime_point),
+            patch.object(return_curve_module, "fetch_eastmoney_benchmark_points", return_value=[]) as fetch_eastmoney,
+        ):
+            points = return_curve_module.fetch_benchmark_points_online("star", today_iso, today_iso)
+
+        self.assertEqual(points, [realtime_point])
+        fetch_eastmoney.assert_not_called()
 
     def test_fetch_benchmark_points_refreshes_short_star_cache(self):
         with tempfile.TemporaryDirectory() as temp_dir:
@@ -324,12 +370,87 @@ class ReturnCurveTests(unittest.TestCase):
 
             with (
                 patch.object(return_curve_module, "BENCHMARK_CACHE_PATH", cache_path),
-                patch.object(return_curve_module, "fetch_benchmark_points_online", return_value=online_points) as fetch_online,
+                patch.object(return_curve_module, "fetch_benchmark_points_online", side_effect=[online_points, []]) as fetch_online,
             ):
                 points = return_curve_module.fetch_benchmark_points("star", "2022-04-11", "2026-05-13")
 
-        self.assertEqual(points, online_points)
-        fetch_online.assert_called_once()
+        self.assertEqual([point["iso"] for point in points], ["2022-04-11", "2025-01-20"])
+        self.assertEqual(
+            fetch_online.call_args_list,
+            [
+                call(return_curve_module.benchmark_definition("star"), "2022-04-11", "2025-01-19"),
+                call(return_curve_module.benchmark_definition("star"), "2025-01-21", "2026-05-13"),
+            ],
+        )
+
+    def test_fetch_benchmark_points_extends_cached_history_by_tail_only(self):
+        with tempfile.TemporaryDirectory() as temp_dir:
+            cache_path = Path(temp_dir) / "benchmark_history.json"
+            cached_points = [{"date": "2026/05/07", "iso": "2026-05-07", "serial": 46149, "close": 100}]
+            online_points = [{"date": "2026/05/08", "iso": "2026-05-08", "serial": 46150, "close": 102}]
+            cache_path.write_text(
+                json.dumps(
+                    {
+                        "version": return_curve_module.BENCHMARK_CACHE_VERSION,
+                        "benchmarks": {
+                            "1.000001": {
+                                "fetched_at": "2026-05-07",
+                                "points": cached_points,
+                            }
+                        },
+                    }
+                ),
+                encoding="utf-8",
+            )
+
+            with (
+                patch.object(return_curve_module, "BENCHMARK_CACHE_PATH", cache_path),
+                patch.object(return_curve_module, "fetch_benchmark_points_online", return_value=online_points) as fetch_online,
+            ):
+                points = return_curve_module.fetch_benchmark_points("1.000001", "2026-05-07", "2026-05-08")
+
+        self.assertEqual([point["iso"] for point in points], ["2026-05-07", "2026-05-08"])
+        fetch_online.assert_called_once_with(
+            return_curve_module.benchmark_definition("1.000001"),
+            "2026-05-08",
+            "2026-05-08",
+        )
+
+    def test_fetch_benchmark_points_does_not_skip_today_tail_after_yesterday_check(self):
+        today_iso = date.today().isoformat()
+        previous_iso = (date.today() - timedelta(days=1)).isoformat()
+        with tempfile.TemporaryDirectory() as temp_dir:
+            cache_path = Path(temp_dir) / "benchmark_history.json"
+            cached_points = [{"date": previous_iso.replace("-", "/"), "iso": previous_iso, "serial": 46155, "close": 100}]
+            online_points = [{"date": today_iso.replace("-", "/"), "iso": today_iso, "serial": 46156, "close": 102}]
+            cache_path.write_text(
+                json.dumps(
+                    {
+                        "version": return_curve_module.BENCHMARK_CACHE_VERSION,
+                        "benchmarks": {
+                            "1.000001": {
+                                "fetched_at": date.today().isoformat(),
+                                "checked_end_iso": previous_iso,
+                                "points": cached_points,
+                            }
+                        },
+                    }
+                ),
+                encoding="utf-8",
+            )
+
+            with (
+                patch.object(return_curve_module, "BENCHMARK_CACHE_PATH", cache_path),
+                patch.object(return_curve_module, "fetch_benchmark_points_online", return_value=online_points) as fetch_online,
+            ):
+                points = return_curve_module.fetch_benchmark_points("1.000001", previous_iso, today_iso)
+
+        self.assertEqual([point["iso"] for point in points], [previous_iso, today_iso])
+        fetch_online.assert_called_once_with(
+            return_curve_module.benchmark_definition("1.000001"),
+            today_iso,
+            today_iso,
+        )
 
     def test_fetch_benchmark_points_online_uses_yahoo_for_us_index(self):
         yahoo_points = [{"date": "2026/05/07", "iso": "2026-05-07", "serial": 46149, "close": 5100.5}]
