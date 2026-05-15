@@ -169,6 +169,10 @@ class HistoricalCurveTests(unittest.TestCase):
         self.assertEqual(item["name"], "浦发银行")
         self.assertEqual(item["currency"], "人民币")
         self.assertAlmostEqual(item["pnl"], 119.0)
+        self.assertAlmostEqual(item["nativeFloatPnl"], 119.0)
+        self.assertAlmostEqual(item["nativeRealizedPnl"], 0.0)
+        self.assertTrue(item["openAtPeriodEnd"])
+        self.assertEqual(item["closedCount"], 0)
         self.assertAlmostEqual(item["capital"], 1001.0)
         self.assertAlmostEqual(item["rate"], item["pnl"] / item["capital"] * 100)
 
@@ -203,6 +207,51 @@ class HistoricalCurveTests(unittest.TestCase):
         self.assertAlmostEqual(march_item["pnl"], -3465.0)
         self.assertAlmostEqual(march_item["capital"], 35063.87)
         self.assertAlmostEqual(march_item["rate"], -3465.0 / 35063.87 * 100)
+
+    def test_performance_stock_payload_splits_month_and_year_by_period_boundary(self):
+        snapshots = {
+            date(2025, 12, 31): {
+                ("688017", "人民币"): {
+                    "code": "688017",
+                    "name": "绿的谐波",
+                    "currency": "人民币",
+                    "value": 142359.68,
+                    "realized_value": 0.0,
+                    "float_value": 142359.68,
+                    "capital": 581294.6,
+                    "market_value": 723654.28,
+                    "closed_count": 0,
+                }
+            },
+            date(2026, 1, 8): {
+                ("688017", "人民币"): {
+                    "code": "688017",
+                    "name": "绿的谐波",
+                    "currency": "人民币",
+                    "value": 137389.480866,
+                    "realized_value": 137389.480866,
+                    "float_value": 0.0,
+                    "capital": 581294.6,
+                    "closed_count": 1,
+                }
+            },
+        }
+
+        with patch("trade_tracker.historical_curve.current_fx_rates_to_cny", return_value={"人民币": 1.0}):
+            payload = build_performance_stock_payload(snapshots)
+
+        january = payload["months"]["2026-01"][0]
+        prior_year = payload["years"]["2025"][0]
+        year = payload["years"]["2026"][0]
+        self.assertAlmostEqual(january["nativePnl"], -4970.199134)
+        self.assertAlmostEqual(january["nativeRealizedPnl"], 137389.480866)
+        self.assertAlmostEqual(january["nativeFloatPnl"], -142359.68)
+        self.assertFalse(january["openAtPeriodEnd"])
+        self.assertEqual(january["closedCount"], 1)
+        self.assertTrue(prior_year["openAtPeriodEnd"])
+        self.assertEqual(prior_year["closedCount"], 0)
+        self.assertAlmostEqual(year["nativePnl"], -4970.199134)
+        self.assertNotAlmostEqual(year["nativePnl"], 137389.480866)
 
     def test_holding_float_uses_trade_cost_as_curve_baseline(self):
         row = stock_row()

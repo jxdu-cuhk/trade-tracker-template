@@ -35,6 +35,7 @@ from trade_tracker.html_tables import (
     normalize_legacy_holdings_table,
     normalize_legacy_open_option_table,
     normalize_legacy_open_option_sections,
+    prioritize_annual_summary_filter,
 )
 from trade_tracker.holdings_daily import apply_segmented_daily_pnl
 from trade_tracker.dividends import DIVIDEND_SHEET_NAME, load_dividend_events, load_workbook_dividend_events
@@ -100,7 +101,7 @@ class FakeCore:
 
 
 class RealizedCostAdjustmentTests(unittest.TestCase):
-    def test_annual_summary_assigns_stock_to_final_clear_year(self):
+    def test_annual_summary_uses_year_sliced_performance_payload(self):
         stock_table = """
         <table class="summary-table" data-summary-kind="stock">
           <thead><tr>
@@ -131,12 +132,56 @@ class RealizedCostAdjustmentTests(unittest.TestCase):
         </table>
         """
 
-        updated = align_annual_summary_with_stock_summary(stock_table + annual_table)
+        old_payload = state.PERFORMANCE_STOCK_PAYLOAD
+        old_days = state.ANNUAL_HOLDING_DAYS_MAP
+        state.PERFORMANCE_STOCK_PAYLOAD = {
+            "years": {
+                "2026": [
+                    {
+                        "code": "688017",
+                        "name": "绿的谐波",
+                        "currency": "人民币",
+                        "nativePnl": -4970.199133999937,
+                        "nativeRealizedPnl": 0.0,
+                        "nativeFloatPnl": -4970.199133999937,
+                        "rate": -0.8550224161724428,
+                    }
+                ]
+            },
+            "months": {},
+        }
+        state.ANNUAL_HOLDING_DAYS_MAP = {("688017", "人民币", "2026"): 7}
+        try:
+            updated = align_annual_summary_with_stock_summary(stock_table + annual_table)
+        finally:
+            state.PERFORMANCE_STOCK_PAYLOAD = old_payload
+            state.ANNUAL_HOLDING_DAYS_MAP = old_days
 
-        self.assertIn('data-year="total"', updated)
-        self.assertIn('data-year="2026"', updated)
-        self.assertIn("<td class=\"text\">2026</td><td class=\"text\">2026/01/08</td><td class=\"text\">688017</td>", updated)
-        self.assertNotRegex(updated, r'(?s)data-year="2025"[^>]*>.*?688017')
+        annual_section = updated[updated.index('data-summary-kind="annual"') :]
+        self.assertIn('data-year="2026"', annual_section)
+        self.assertIn("<td class=\"text\">2026</td><td class=\"text\">2026/01/08</td><td class=\"text\">688017</td>", annual_section)
+        self.assertIn('<td class="money value-negative">-4,970.20</td>', annual_section)
+        self.assertIn('<td class="num">7</td>', annual_section)
+        self.assertNotIn("137,389.48", annual_section)
+        self.assertNotIn('data-year="total"', annual_section)
+        self.assertNotRegex(annual_section, r'(?s)data-year="2025"[^>]*>.*?688017')
+
+    def test_annual_summary_filter_defaults_to_current_year(self):
+        current_year = str(date.today().year)
+        prior_year = str(date.today().year - 1)
+        html = f"""
+        <select class="filter-select js-year-filter" data-target-table="annual-summary-table">
+          <option value="all" selected>全部年份</option>
+          <option value="{prior_year}">{prior_year}</option>
+          <option value="{current_year}">{current_year}</option>
+        </select>
+        """
+
+        updated = prioritize_annual_summary_filter(html)
+
+        self.assertIn(f'<option value="{current_year}" selected>{current_year}</option>', updated)
+        self.assertIn('<option value="all">全部年份明细</option>', updated)
+        self.assertNotIn('value="total"', updated)
 
     def test_closed_stock_rows_are_grouped_by_ticker_and_currency(self):
         rows = [

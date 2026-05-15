@@ -232,6 +232,12 @@ def render_realized_toolbar() -> str:
               <select class="filter-select js-realized-month" aria-label="选择盈亏日历月份"></select>
               <span class="filter-label">币种</span>
               <select class="filter-select js-realized-currency" aria-label="选择盈亏日历币种"></select>
+              <span class="filter-label">显示</span>
+              <div class="realized-mode-tabs" data-realized-calendar-mode aria-label="选择日历显示口径">
+                <button type="button" class="realized-mode-tab is-active" data-calendar-mode="realized">已实现</button>
+                <button type="button" class="realized-mode-tab" data-calendar-mode="float">浮盈</button>
+                <button type="button" class="realized-mode-tab" data-calendar-mode="total">合计</button>
+              </div>
             </div>
 """
 
@@ -255,6 +261,7 @@ def render_calendar_panel() -> str:
         f"{render_realized_toolbar()}\n"
         '<div class="pnl-calendar" data-pnl-calendar aria-label="每日已实现盈亏日历"></div>\n'
         '<h3 class="realized-subtitle" data-realized-day-title>当日明细</h3>\n'
+        '<div class="realized-day-metrics" data-realized-day-metrics></div>\n'
         + render_empty_table(day_headers, "data-realized-day-body", "选择日期后显示当日已实现盈亏。")
         + "\n</div>"
     )
@@ -329,11 +336,40 @@ def render_realized_filter_script() -> str:
             payload = { trades: [] };
           }
           const trades = Array.isArray(payload.trades) ? payload.trades.filter((trade) => trade && trade.date) : [];
+          let curveSeries = [];
+          const curveSeriesByScope = new Map();
+          let curveSourceText = '';
+          let curveChangeCacheScope = '';
+          let curveChangeCache = null;
+
+          function loadCurveSeries() {
+            const curveNode = document.querySelector('[data-return-curve-json]');
+            const nextSource = curveNode ? String(curveNode.textContent || '') : '';
+            if (!nextSource || nextSource === curveSourceText) return false;
+            curveSourceText = nextSource;
+            try {
+              const curvePayload = JSON.parse(nextSource || '[]');
+              curveSeries = Array.isArray(curvePayload) ? curvePayload.filter((series) => series && Array.isArray(series.points)) : [];
+            } catch (_error) {
+              curveSeries = [];
+            }
+            curveSeriesByScope.clear();
+            curveSeries.forEach((series) => {
+              const scope = String(series.scope || 'all').trim() || 'all';
+              if (!curveSeriesByScope.has(scope)) curveSeriesByScope.set(scope, series);
+            });
+            curveChangeCacheScope = '';
+            curveChangeCache = null;
+            return curveSeries.length > 0;
+          }
+          loadCurveSeries();
 
           const monthSelect = section.querySelector('.js-realized-month');
           const currencySelect = section.querySelector('.js-realized-currency');
+          const calendarModeControl = section.querySelector('[data-realized-calendar-mode]');
           const calendar = section.querySelector('[data-pnl-calendar]');
           const dayTitle = section.querySelector('[data-realized-day-title]');
+          const dayMetrics = section.querySelector('[data-realized-day-metrics]');
           const dayBody = section.querySelector('[data-realized-day-body]');
           const stageStart = section.querySelector('.js-stage-start');
           const stageEnd = section.querySelector('.js-stage-end');
@@ -344,18 +380,25 @@ def render_realized_filter_script() -> str:
           if (!monthSelect || !currencySelect || !calendar || !dayBody || !stageStart || !stageEnd) return;
 
           let selectedDate = '';
+          let calendarMode = 'realized';
 
           function unique(values) {
             return Array.from(new Set(values.filter(Boolean)));
           }
 
           function sortedMonths() {
-            return unique(trades.map((trade) => String(trade.month || trade.date.slice(0, 7))))
+            const curveMonths = curveSeries.flatMap((series) => (series.points || []).map((point) => String(point.iso || '').slice(0, 7)));
+            return unique([...trades.map((trade) => String(trade.month || trade.date.slice(0, 7))), ...curveMonths])
               .sort((a, b) => b.localeCompare(a, 'zh-CN', { numeric: true }));
           }
 
           function sortedCurrencies() {
-            return unique(trades.map((trade) => String(trade.currency || '未标注币种')))
+            const curveCurrencies = [
+              curveSeriesByScope.has('cn') ? '人民币' : '',
+              curveSeriesByScope.has('hk') ? '港币' : '',
+              curveSeriesByScope.has('us') ? '美元' : '',
+            ];
+            return unique([...trades.map((trade) => String(trade.currency || '未标注币种')), ...curveCurrencies])
               .sort((a, b) => a.localeCompare(b, 'zh-CN'));
           }
 
@@ -376,6 +419,53 @@ def render_realized_filter_script() -> str:
             return Number.isFinite(parsed) ? parsed : 0;
           }
 
+          function optionalNumber(value) {
+            if (value === null || value === undefined || value === '') return NaN;
+            const parsed = Number(value);
+            return Number.isFinite(parsed) ? parsed : NaN;
+          }
+
+          function parseDisplayNumber(value) {
+            const text = String(value ?? '').replace(/,/g, '').trim();
+            if (!text || text === '-' || text === '--') return NaN;
+            const cleaned = text.replace(/[^\\d.+-]/g, '');
+            if (!cleaned || cleaned === '-' || cleaned === '+') return NaN;
+            const parsed = Number(cleaned);
+            return Number.isFinite(parsed) ? parsed : NaN;
+          }
+
+          function reportingCurrency() {
+            const api = window.tradeTrackerReportingCurrency;
+            if (api && typeof api.label === 'function') return api.label();
+            const label = document.documentElement.dataset.reportingCurrency || '人民币';
+            return ['人民币', '港币', '美元'].includes(label) ? label : '人民币';
+          }
+
+          function rateToCnyForCurrency(currency) {
+            const label = String(currency || '').trim() || '人民币';
+            const rate = Number((window.tradeTrackerFxRatesToCny || {})[label]);
+            return Number.isFinite(rate) && rate > 0 ? rate : 1;
+          }
+
+          function reportingRateToCny() {
+            const api = window.tradeTrackerReportingCurrency;
+            if (api && typeof api.rateToCny === 'function') {
+              const rate = Number(api.rateToCny());
+              if (Number.isFinite(rate) && rate > 0) return rate;
+            }
+            return rateToCnyForCurrency(reportingCurrency());
+          }
+
+          function formatConvertedMoney(cnyValue) {
+            const converted = optionalNumber(cnyValue) / reportingRateToCny();
+            if (!Number.isFinite(converted)) return '--';
+            const sign = converted > 0 ? '+' : converted < 0 ? '-' : '';
+            return `${sign}${Math.abs(converted).toLocaleString('en-US', {
+              minimumFractionDigits: 2,
+              maximumFractionDigits: 2,
+            })}`;
+          }
+
           function formatNumber(value, digits = 2) {
             return Number(value || 0).toLocaleString('en-US', {
               minimumFractionDigits: digits,
@@ -393,7 +483,152 @@ def render_realized_filter_script() -> str:
             return 'value-zero';
           }
 
-          function dayToneClass(stats) {
+          function curveScopeForCurrency() {
+            if (currencySelect.value === '人民币') return 'cn';
+            if (currencySelect.value === '港币') return 'hk';
+            if (currencySelect.value === '美元') return 'us';
+            return 'all';
+          }
+
+          function selectedCurveSeries() {
+            const scope = curveScopeForCurrency();
+            return curveSeriesByScope.get(scope) || (scope === 'all' ? curveSeries[0] : null);
+          }
+
+          function latestCurveIso() {
+            const series = selectedCurveSeries();
+            const points = (series?.points || [])
+              .map((point) => String(point?.iso || ''))
+              .filter(Boolean)
+              .sort();
+            return points.length ? points[points.length - 1] : '';
+          }
+
+          function curveChangeMap() {
+            const scope = curveScopeForCurrency();
+            if (curveChangeCache && curveChangeCacheScope === scope) return curveChangeCache;
+            const series = selectedCurveSeries();
+            const points = (series?.points || [])
+              .filter((point) => point && point.iso)
+              .slice()
+              .sort((a, b) => String(a.iso).localeCompare(String(b.iso)));
+            const changes = new Map();
+            points.forEach((point, index) => {
+              const previous = index > 0 ? points[index - 1] : null;
+              const total = optionalNumber(point.total_value);
+              const previousTotal = previous ? optionalNumber(previous.total_value) : total;
+              const value = Number.isFinite(total) ? total : optionalNumber(point.value);
+              const previousValue = Number.isFinite(previousTotal) ? previousTotal : (previous ? optionalNumber(previous.value) : value);
+              const floatValue = optionalNumber(point.float_value);
+              const previousFloat = previous ? optionalNumber(previous.float_value) : floatValue;
+              const realizedValue = optionalNumber(point.realized_value);
+              const previousRealized = previous ? optionalNumber(previous.realized_value) : realizedValue;
+              changes.set(String(point.iso), {
+                iso: String(point.iso),
+                totalDelta: Number.isFinite(value) && Number.isFinite(previousValue) ? value - previousValue : NaN,
+                floatDelta: Number.isFinite(floatValue) && Number.isFinite(previousFloat) ? floatValue - previousFloat : NaN,
+                realizedDelta: Number.isFinite(realizedValue) && Number.isFinite(previousRealized) ? realizedValue - previousRealized : NaN,
+              });
+            });
+            curveChangeCacheScope = scope;
+            curveChangeCache = changes;
+            return changes;
+          }
+
+          function curveChangeForDay(iso) {
+            return curveChangeMap().get(iso) || { iso, totalDelta: NaN, floatDelta: NaN, realizedDelta: NaN };
+          }
+
+          function hasCurveActivity(change) {
+            return Math.abs(optionalNumber(change?.totalDelta)) > 0.000001
+              || Math.abs(optionalNumber(change?.floatDelta)) > 0.000001
+              || Math.abs(optionalNumber(change?.realizedDelta)) > 0.000001;
+          }
+
+          function realizedConvertedForDay(iso) {
+            return tradesForDay(iso).reduce((total, trade) => total + number(trade.pnl) * rateToCnyForCurrency(tradeCurrency(trade)), 0);
+          }
+
+          function currentHoldingDailyFloatCny() {
+            const table = document.querySelector('table[data-summary-kind="holdings"]');
+            const selectedCurrency = currencySelect.value;
+            let tableTotal = 0;
+            let hasTableValue = false;
+            if (table) {
+              const labels = Array.from(table.querySelectorAll('thead th')).map((th) => String(th.textContent || '').trim());
+              const dailyIndex = labels.findIndex((label) => label === '当日盈亏' || (label.includes('当日') && label.includes('盈亏')));
+              const currencyIndex = labels.findIndex((label) => label === '币种');
+              if (dailyIndex >= 0 && currencyIndex >= 0) {
+                table.querySelectorAll('tbody tr').forEach((row) => {
+                  const cells = Array.from(row.children);
+                  const dailyCell = cells[dailyIndex];
+                  const currency = String(cells[currencyIndex]?.textContent || '').trim();
+                  if (!dailyCell || !currency) return;
+                  if (selectedCurrency !== 'all' && currency !== selectedCurrency) return;
+                  const rawValue = dailyCell.dataset.sortValue || dailyCell.textContent || '';
+                  const nativeValue = parseDisplayNumber(rawValue);
+                  if (!Number.isFinite(nativeValue)) return;
+                  tableTotal += nativeValue * rateToCnyForCurrency(currency);
+                  hasTableValue = true;
+                });
+              }
+            }
+            if (hasTableValue) return tableTotal;
+            if (selectedCurrency === 'all') {
+              const cardValue = document.querySelector('[data-holdings-reference-card] [data-holdings-range-panel="day"] .holdings-account-value[data-reporting-money-cny]');
+              const cnyValue = optionalNumber(cardValue?.dataset.reportingMoneyCny);
+              if (Number.isFinite(cnyValue)) return cnyValue;
+            }
+            return NaN;
+          }
+
+          function currentHoldingFloatForDay(iso) {
+            if (!iso || iso !== latestCurveIso()) return NaN;
+            return currentHoldingDailyFloatCny();
+          }
+
+          function dailyFloatCnyForDay(iso, change) {
+            const holdingFloat = currentHoldingFloatForDay(iso);
+            if (Number.isFinite(holdingFloat)) return holdingFloat;
+            return optionalNumber(change?.floatDelta);
+          }
+
+          function dailyFloatSourceForDay(iso) {
+            return Number.isFinite(currentHoldingFloatForDay(iso)) ? '按当前持仓汇总' : '按历史行情';
+          }
+
+          function dailyTotalCnyForDay(iso, change) {
+            const holdingFloat = currentHoldingFloatForDay(iso);
+            const realized = realizedConvertedForDay(iso);
+            if (Number.isFinite(holdingFloat)) return realized + holdingFloat;
+            const totalDelta = optionalNumber(change?.totalDelta);
+            if (Number.isFinite(totalDelta)) return totalDelta;
+            const floatDelta = dailyFloatCnyForDay(iso, change);
+            return realized + (Number.isFinite(floatDelta) ? floatDelta : 0);
+          }
+
+          function selectedCalendarMode() {
+            return ['realized', 'float', 'total'].includes(calendarMode) ? calendarMode : 'realized';
+          }
+
+          function calendarMetricForDay(iso, stats, change) {
+            const mode = selectedCalendarMode();
+            if (mode === 'float') {
+              const value = dailyFloatCnyForDay(iso, change);
+              return { label: '浮盈', value, hasActivity: Number.isFinite(value) && Math.abs(value) > 0.000001 };
+            }
+            if (mode === 'total') {
+              const value = dailyTotalCnyForDay(iso, change);
+              return { label: '合计', value, hasActivity: Number.isFinite(value) && Math.abs(value) > 0.000001 };
+            }
+            const value = realizedConvertedForDay(iso);
+            return { label: '已实现', value, hasActivity: stats.length > 0 || Math.abs(value) > 0.000001 };
+          }
+
+          function dayToneClassForValue(value, stats) {
+            if (Number.isFinite(value) && Math.abs(value) > 0.000001) {
+              return value > 0 ? 'pnl-day-positive' : 'pnl-day-negative';
+            }
             const hasPositive = stats.some((item) => item.pnl > 0.000001);
             const hasNegative = stats.some((item) => item.pnl < -0.000001);
             if (hasPositive && !hasNegative) return 'pnl-day-positive';
@@ -452,6 +687,21 @@ def render_realized_filter_script() -> str:
             }
           }
 
+          function selectHasValue(select, value) {
+            return Array.from(select.options || []).some((option) => option.value === value);
+          }
+
+          function refreshCurveDataAndRender() {
+            if (!loadCurveSeries()) return;
+            const previousMonth = monthSelect.value;
+            const previousCurrency = currencySelect.value;
+            populateControls();
+            if (previousMonth && selectHasValue(monthSelect, previousMonth)) monthSelect.value = previousMonth;
+            if (previousCurrency && selectHasValue(currencySelect, previousCurrency)) currencySelect.value = previousCurrency;
+            selectedDate = '';
+            renderAll();
+          }
+
           function tradesForDay(iso) {
             return trades
               .filter((trade) => trade.date === iso && matchesCurrency(trade))
@@ -470,13 +720,22 @@ def render_realized_filter_script() -> str:
             return Array.from(stats.values()).sort((a, b) => a.currency.localeCompare(b.currency, 'zh-CN'));
           }
 
+          function hasSelectedMetricActivity(iso) {
+            const stats = statsForDay(iso);
+            const change = curveChangeForDay(iso);
+            return calendarMetricForDay(iso, stats, change).hasActivity;
+          }
+
           function pickSelectedDate(month) {
-            if (selectedDate && selectedDate.slice(0, 7) === month && tradesForDay(selectedDate).length) return;
-            const candidates = trades
+            if (selectedDate && selectedDate.slice(0, 7) === month && hasSelectedMetricActivity(selectedDate)) return;
+            const candidates = unique(trades
               .filter((trade) => String(trade.date).slice(0, 7) === month && matchesCurrency(trade))
-              .map((trade) => trade.date)
-              .sort();
-            selectedDate = candidates.length ? candidates[candidates.length - 1] : `${month}-01`;
+              .map((trade) => trade.date));
+            Array.from(curveChangeMap().entries()).forEach(([iso, change]) => {
+              if (iso.slice(0, 7) === month && hasCurveActivity(change)) candidates.push(iso);
+            });
+            const visibleCandidates = unique(candidates).filter((iso) => hasSelectedMetricActivity(iso)).sort();
+            selectedDate = visibleCandidates.length ? visibleCandidates[visibleCandidates.length - 1] : `${month}-01`;
           }
 
           function renderCalendar() {
@@ -510,10 +769,13 @@ def render_realized_filter_script() -> str:
             for (let day = 1; day <= daysInMonth; day += 1) {
               const iso = isoDate(year, monthNumber, day);
               const stats = statsForDay(iso);
+              const change = curveChangeForDay(iso);
+              const metric = calendarMetricForDay(iso, stats, change);
+              const hasActivity = metric.hasActivity;
               const button = document.createElement('button');
               button.type = 'button';
               button.className = 'pnl-calendar-day';
-              if (stats.length) button.classList.add('has-trades', dayToneClass(stats));
+              if (hasActivity) button.classList.add('has-trades', dayToneClassForValue(metric.value, stats));
               if (iso === selectedDate) button.classList.add('is-selected');
               button.dataset.date = iso;
 
@@ -524,25 +786,34 @@ def render_realized_filter_script() -> str:
 
               const lines = document.createElement('span');
               lines.className = 'pnl-day-lines';
-              if (!stats.length) {
+              if (!hasActivity) {
                 const empty = document.createElement('span');
                 empty.className = 'pnl-day-muted';
                 empty.textContent = '-';
                 lines.appendChild(empty);
               } else {
-                stats.forEach((item) => {
+                if (selectedCalendarMode() === 'realized') {
+                  stats.forEach((item) => {
+                    const line = document.createElement('span');
+                    line.className = `pnl-day-line ${tone(item.pnl)}`;
+                    line.textContent = `${item.currency} ${formatNumber(item.pnl)}`;
+                    lines.appendChild(line);
+                  });
+                } else {
                   const line = document.createElement('span');
-                  line.className = `pnl-day-line ${tone(item.pnl)}`;
-                  line.textContent = `${item.currency} ${formatNumber(item.pnl)}`;
+                  line.className = `pnl-day-line ${tone(optionalNumber(metric.value))}`;
+                  line.textContent = `${metric.label} ${formatConvertedMoney(metric.value)}`;
                   lines.appendChild(line);
-                });
+                }
               }
               button.appendChild(lines);
 
               const count = document.createElement('span');
               count.className = 'pnl-day-count';
               const tradeCount = stats.reduce((total, item) => total + item.count, 0);
-              count.textContent = tradeCount ? `${tradeCount} 笔` : '';
+              count.textContent = selectedCalendarMode() === 'realized'
+                ? (tradeCount ? `${tradeCount} 笔` : '')
+                : (hasActivity ? '波动' : '');
               button.appendChild(count);
 
               button.addEventListener('click', () => {
@@ -585,7 +856,28 @@ def render_realized_filter_script() -> str:
 
           function renderDayDetail() {
             if (dayTitle) dayTitle.textContent = `当日明细 ${selectedDate || ''}`;
+            renderDayMetrics();
             renderTradeRows(dayBody, tradesForDay(selectedDate), '这个日期没有已实现盈亏记录。', false);
+          }
+
+          function renderDayMetrics() {
+            if (!dayMetrics) return;
+            const change = curveChangeForDay(selectedDate);
+            const realizedConverted = realizedConvertedForDay(selectedDate);
+            const floatDelta = dailyFloatCnyForDay(selectedDate, change);
+            const totalValue = dailyTotalCnyForDay(selectedDate, change);
+            const metrics = [
+              { label: `已实现折${reportingCurrency()}`, value: realizedConverted, note: '按平仓记录' },
+              { label: `当日浮盈变动折${reportingCurrency()}`, value: Number.isFinite(floatDelta) ? floatDelta : 0, note: dailyFloatSourceForDay(selectedDate) },
+              { label: `当日总变动折${reportingCurrency()}`, value: totalValue, note: '已实现加持仓浮动' },
+            ];
+            dayMetrics.innerHTML = metrics.map((item) => `
+              <div class="realized-day-metric">
+                <span>${item.label}</span>
+                <strong class="${tone(optionalNumber(item.value))}">${formatConvertedMoney(item.value)}</strong>
+                <small>${item.note}</small>
+              </div>
+            `).join('');
           }
 
           function stageTrades() {
@@ -713,6 +1005,11 @@ def render_realized_filter_script() -> str:
           }
 
           populateControls();
+          if (document.readyState === 'loading') {
+            document.addEventListener('DOMContentLoaded', refreshCurveDataAndRender, { once: true });
+          } else {
+            refreshCurveDataAndRender();
+          }
           monthSelect.addEventListener('change', () => {
             selectedDate = '';
             renderAll();
@@ -721,6 +1018,20 @@ def render_realized_filter_script() -> str:
             selectedDate = '';
             renderAll();
           });
+          if (calendarModeControl) {
+            calendarModeControl.addEventListener('click', (event) => {
+              if (!(event.target instanceof Element)) return;
+              const button = event.target.closest('[data-calendar-mode]');
+              if (!button) return;
+              calendarMode = button.dataset.calendarMode || 'realized';
+              calendarModeControl.querySelectorAll('[data-calendar-mode]').forEach((item) => {
+                item.classList.toggle('is-active', item === button);
+              });
+              selectedDate = '';
+              renderAll();
+            });
+          }
+          window.addEventListener('trade-tracker-reporting-currency-change', renderAll);
           stageStart.addEventListener('change', renderStage);
           stageEnd.addEventListener('change', renderStage);
           renderAll();
@@ -743,7 +1054,7 @@ def render_realized_analysis_section(core, rows: list[tuple[int, dict[int, objec
             <div class="section-head">
               <div>
                 <h2 class="section-title">盈亏日历 / 阶段账单</h2>
-                <p class="section-note">只按已经录入平仓日的交易计算已实现盈亏；不拉取历史行情，也不把当前持仓浮盈亏倒推到过去日期。</p>
+                <p class="section-note">日历可在已实现、持仓浮盈和合计之间切换；已实现按平仓记录，最新交易日浮盈优先与当前持仓汇总保持一致，历史日期沿用历史行情曲线。</p>
               </div>
               <span class="section-toggle" aria-hidden="true"></span>
             </div>

@@ -8,7 +8,7 @@ from datetime import date
 from . import state
 from .market_data import current_fx_rates_to_cny, display_currency_label, option_kind_for_event
 from .settings import ANNUAL_STOCK_SUMMARY_COLUMN_ORDER, HOLDINGS_COLUMN_ORDER, STOCK_SUMMARY_COLUMN_ORDER
-from .utils import cell_text, core_trade_type, date_key, parse_float
+from .utils import cell_text, clean_text, core_trade_type, date_key, parse_float
 from .options import option_key
 
 
@@ -1387,6 +1387,123 @@ def annual_source_cell(label: str, annual_map: dict[str, str], stock_map: dict[s
     return default_td_for_label(label)
 
 
+def numeric_td(label: str, value: float | None, decimals: int = 2) -> str:
+    css_class = {
+        "已实现盈亏": "money",
+        "总盈亏": "money",
+        "持仓浮盈亏": "money",
+        "分红净额": "money",
+        "总收益率": "percent",
+        "综合年化": "percent",
+        "持有天数": "num",
+        "已平仓笔数": "num",
+        "当前仓位": "num",
+    }.get(label, "num")
+    tone_labels = {"已实现盈亏", "总盈亏", "持仓浮盈亏", "分红净额", "总收益率", "综合年化"}
+    tone_class = value_class(value) if label in tone_labels else ""
+    text = format_plain_number(value, decimals) if value is not None else "-"
+    return f'<td class="{css_class}{tone_class}">{html.escape(text)}</td>'
+
+
+def percent_td_from_percent(label: str, value: float | None) -> str:
+    if value is None:
+        return default_td_for_label(label)
+    if abs(value) < 0.005:
+        value = 0.0
+    return f'<td class="percent{value_class(value)}">{value:,.2f}%</td>'
+
+
+def annual_days_for_period_item(year: str, item: dict[str, object], stock_map: dict[str, str]) -> int | None:
+    code = clean_text(item.get("code"))
+    currency = clean_text(item.get("currency"))
+    annual_days = state.ANNUAL_HOLDING_DAYS_MAP.get((code, currency, year))
+    if annual_days is not None:
+        return annual_days
+    raw_days = parse_float(cell_text(stock_map.get("持有天数", "")))
+    if raw_days is None:
+        return None
+    return int(raw_days)
+
+
+def annualized_percent_for_period(rate_percent: float | None, days: int | None) -> float | None:
+    if rate_percent is None or not days or days <= 0:
+        return None
+    return rate_percent * 365.0 / days
+
+
+def annual_period_cell(label: str, year: str, item: dict[str, object], stock_map: dict[str, str]) -> str:
+    code = clean_text(item.get("code"))
+    currency = clean_text(item.get("currency"))
+    native_pnl = parse_float(item.get("nativePnl"))
+    native_realized_pnl = parse_float(item.get("nativeRealizedPnl"))
+    native_float_pnl = parse_float(item.get("nativeFloatPnl"))
+    rate_percent = parse_float(item.get("rate"))
+    days = annual_days_for_period_item(year, item, stock_map)
+    period_open = bool(item.get("openAtPeriodEnd"))
+    if label == "年份":
+        return default_td_for_label(label, year)
+    if label == "代码":
+        return default_td_for_label(label, code)
+    if label == "名称":
+        return default_td_for_label(label, clean_text(item.get("name")) or code)
+    if label == "币种":
+        return default_td_for_label(label, currency)
+    if label == "最后清仓时间":
+        return default_td_for_label(label) if period_open else stock_map.get(label) or default_td_for_label(label)
+    if label == "已实现盈亏":
+        return numeric_td(label, native_realized_pnl if period_open else native_pnl)
+    if label == "总盈亏":
+        return numeric_td(label, native_pnl)
+    if label == "总收益率":
+        return percent_td_from_percent(label, rate_percent)
+    if label == "综合年化":
+        return percent_td_from_percent(label, annualized_percent_for_period(rate_percent, days))
+    if label == "持有天数":
+        return numeric_td(label, float(days) if days is not None else None, 0)
+    if label == "持仓浮盈亏":
+        return numeric_td(label, native_float_pnl if period_open and native_float_pnl is not None and abs(native_float_pnl) > 0.005 else None)
+    if label == "分红净额":
+        return numeric_td(label, 0.0)
+    if label == "已平仓笔数":
+        closed_count = parse_float(item.get("closedCount"))
+        if closed_count is not None:
+            return numeric_td(label, closed_count, 0)
+        return stock_map.get(label) or default_td_for_label(label)
+    if label in {"当前方向", "当前仓位"}:
+        return stock_map.get(label) or default_td_for_label(label)
+    return default_td_for_label(label)
+
+
+def annual_period_rows_from_performance(
+    stock_lookup: dict[tuple[str, str], dict[str, str]],
+) -> list[str]:
+    years = state.PERFORMANCE_STOCK_PAYLOAD.get("years") if isinstance(state.PERFORMANCE_STOCK_PAYLOAD, dict) else None
+    if not isinstance(years, dict) or not years:
+        return []
+    rendered_rows = []
+    for year in sorted((clean_text(item) for item in years), reverse=True):
+        items = years.get(year)
+        if not isinstance(items, list):
+            continue
+        for item in items:
+            if not isinstance(item, dict):
+                continue
+            code = clean_text(item.get("code"))
+            currency = clean_text(item.get("currency"))
+            if not code or not currency:
+                continue
+            stock_map = stock_lookup.get((code, currency), {})
+            native_pnl = parse_float(item.get("nativePnl"))
+            data_pnl = f"{native_pnl:.6f}" if native_pnl is not None else "0"
+            row_prefix = f'<tr data-year="{html.escape(year, quote=True)}" data-total-pnl="{html.escape(data_pnl, quote=True)}">'
+            new_cells = [
+                annual_period_cell(label, year, item, stock_map)
+                for label in ANNUAL_STOCK_SUMMARY_COLUMN_ORDER
+            ]
+            rendered_rows.append(row_prefix + "".join(new_cells) + "</tr>")
+    return rendered_rows
+
+
 def normalize_annual_summary_columns(
     annual_table_html: str,
     stock_lookup: dict[tuple[str, str], dict[str, str]],
@@ -1404,25 +1521,9 @@ def normalize_annual_summary_columns(
     new_headers = "".join(table_header_html(label) for label in ANNUAL_STOCK_SUMMARY_COLUMN_ORDER)
     new_header_html = header_match.group(1) + new_headers + header_match.group(3)
 
-    rendered_rows = []
-    for row_prefix, _row_body, row_suffix, stock_map in stock_total_rows:
-        new_cells = [
-            '<td class="text">全部</td>' if label == "年份" else stock_summary_cell_for_annual(label, stock_map)
-            for label in ANNUAL_STOCK_SUMMARY_COLUMN_ORDER
-        ]
-        rendered_rows.append(set_row_data_year(row_prefix, "total") + "".join(new_cells) + row_suffix)
-
-    if stock_total_rows:
-        for row_prefix, _row_body, row_suffix, stock_map in stock_total_rows:
-            year = final_clear_year_from_stock_map(stock_map)
-            new_cells = [
-                f'<td class="text">{html.escape(year)}</td>'
-                if label == "年份"
-                else stock_summary_cell_for_annual(label, stock_map)
-                for label in ANNUAL_STOCK_SUMMARY_COLUMN_ORDER
-            ]
-            rendered_rows.append(set_row_data_year(row_prefix, year) + "".join(new_cells) + row_suffix)
-    else:
+    rendered_rows = annual_period_rows_from_performance(stock_lookup)
+    if not rendered_rows:
+        rendered_rows = []
         for row_prefix, _row_body, row_suffix, cells in body_rows(annual_table_html):
             annual_map = cell_map_from_row(labels, cells)
             if not annual_map:
@@ -1469,13 +1570,14 @@ def prioritize_annual_summary_filter(html_text: str) -> str:
     def replace_select(match: re.Match[str]) -> str:
         prefix, options, suffix = match.group(1), match.group(2), match.group(3)
         options = re.sub(r"\sselected\b", "", options)
-        if 'value="total"' not in options:
-            options = (
-                '<option value="total" selected>全部汇总</option>'
-                + options.replace('<option value="all">全部年份</option>', '<option value="all">全部年份明细</option>', 1)
-            )
-        else:
-            options = re.sub(r'(<option value="total")([^>]*>)', r'\1 selected\2', options, count=1)
+        options = re.sub(r'<option value="total"[^>]*>.*?</option>', "", options, flags=re.S)
+        options = options.replace('<option value="all">全部年份</option>', '<option value="all">全部年份明细</option>', 1)
+        current_year = str(date.today().year)
+        current_year_pattern = rf'(<option value="{re.escape(current_year)}")([^>]*>)'
+        if re.search(current_year_pattern, options):
+            options = re.sub(current_year_pattern, r"\1 selected\2", options, count=1)
+        elif 'value="all"' in options:
+            options = re.sub(r'(<option value="all")([^>]*>)', r"\1 selected\2", options, count=1)
         return prefix + options + suffix
 
     return re.sub(

@@ -1518,6 +1518,36 @@ details[data-ths-return-curve] .ths-curve-bars div:nth-child(2) strong {{
   flex-wrap: wrap;
 }}
 
+.realized-mode-tabs {{
+  display: inline-flex;
+  flex: 0 0 auto;
+  flex-wrap: wrap;
+  gap: 2px;
+  padding: 2px;
+  border-radius: 999px;
+  background: #f3f5f6;
+}}
+
+.realized-mode-tab {{
+  appearance: none;
+  border: 0;
+  border-radius: 999px;
+  background: transparent;
+  color: #6f7a80;
+  cursor: pointer;
+  font: inherit;
+  font-size: 12px;
+  font-weight: 850;
+  line-height: 1;
+  padding: 7px 12px;
+  white-space: nowrap;
+}}
+
+.realized-mode-tab.is-active {{
+  background: #ff2f45;
+  color: #ffffff;
+}}
+
 .realized-date-input {{
   min-width: 148px;
 }}
@@ -1612,6 +1642,39 @@ details[data-ths-return-curve] .ths-curve-bars div:nth-child(2) strong {{
 .pnl-calendar-day.pnl-day-mixed.is-selected {{
   border-color: #fbbc04;
   background: #fff7df;
+}}
+
+.realized-day-metrics {{
+  display: grid;
+  grid-template-columns: repeat(3, minmax(0, 1fr));
+  gap: 8px;
+}}
+
+.realized-day-metric {{
+  display: grid;
+  gap: 4px;
+  border: 1px solid #e3ece6;
+  border-radius: 8px;
+  background: #ffffff;
+  padding: 10px 12px;
+}}
+
+.realized-day-metric span {{
+  color: #63766b;
+  font-size: 12px;
+  font-weight: 800;
+}}
+
+.realized-day-metric strong {{
+  color: #202124;
+  font-size: 18px;
+  line-height: 1.1;
+}}
+
+.realized-day-metric small {{
+  color: #8b9891;
+  font-size: 11px;
+  font-weight: 700;
 }}
 
 .pnl-day-number {{
@@ -2465,6 +2528,10 @@ details[data-ths-return-curve] .ths-curve-bars div:nth-child(2) strong {{
   .dashboard-page-tab {{
     flex: 1 1 calc(50% - 8px);
     padding-inline: 10px;
+  }}
+
+  .realized-day-metrics {{
+    grid-template-columns: 1fr;
   }}
 
   .metric-card-hero,

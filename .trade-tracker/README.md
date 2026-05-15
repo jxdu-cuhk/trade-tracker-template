@@ -30,14 +30,14 @@
 - `.trade-tracker/tools/trade_tracker/patcher.py`: 把持仓、汇总、行情、刷新面板等扩展挂到核心生成器上。
 - `.trade-tracker/tools/trade_tracker/dashboard_layout.py`: 顶部分页、栏目布局和总收益曲线控制区。
 - `.trade-tracker/tools/trade_tracker/return_curve.py`: 总收益曲线、baseline、超额收益、K 线、缩放拖动、tooltip，以及指数长期缓存和增量补尾。
-- `.trade-tracker/tools/trade_tracker/historical_curve.py`: 个股真实历史行情、缓存和未实现盈亏历史曲线。
+- `.trade-tracker/tools/trade_tracker/historical_curve.py`: 个股真实历史行情、缓存、未实现盈亏历史曲线，以及按月/按年切片的个股收益 payload。
 - `.trade-tracker/tools/trade_tracker/holdings_overview.py`: 当前持仓顶部汇总卡、当日/本月/近三月/本年已实现盈亏。
 - `.trade-tracker/tools/trade_tracker/reporting_currency.py`: 看板统一口径币种切换。
-- `.trade-tracker/tools/trade_tracker/html_tables.py`: 表格列顺序、汇总行、上下横向滚动条、人民币折算汇总。
+- `.trade-tracker/tools/trade_tracker/html_tables.py`: 表格列顺序、分年度个股汇总、汇总行、上下横向滚动条、人民币折算汇总。
 - `.trade-tracker/tools/trade_tracker/overview.py`: 总体概览、分币种概览和交易费用汇总。
 - `.trade-tracker/tools/trade_tracker/options.py`: 期权和已完成现股收益口径，比如 covered call、short put、缺失保证金兜底和成本回冲。
 - `.trade-tracker/tools/trade_tracker/option_analysis.py`: 期权收益分析页面。
-- `.trade-tracker/tools/trade_tracker/realized_analysis.py`: 盈亏日历 / 阶段账单。
+- `.trade-tracker/tools/trade_tracker/realized_analysis.py`: 盈亏日历 / 阶段账单，日历可切换已实现、持仓浮动和合计口径；最新交易日浮盈对齐当前持仓汇总，历史日期沿用收益曲线。
 - `.trade-tracker/tools/trade_tracker/clearance_analysis.py`: 清仓分析。
 - `.trade-tracker/tools/trade_tracker/performance_report.py`: 收益报告。
 - `.trade-tracker/tools/trade_tracker/market_data.py`: 东方财富、腾讯、Yahoo、HKEX 行情和汇率获取。

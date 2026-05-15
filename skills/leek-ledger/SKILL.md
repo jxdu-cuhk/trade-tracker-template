@@ -88,6 +88,8 @@ Benchmark and curve maintenance notes:
 - Keep benchmark cache compact. After migrating old range-style cache entries into benchmark entries, prune the duplicate range entries so refreshes do not repeatedly parse stale copies.
 - For A-share baselines, prefer Tencent for normal history and real-time tail points. Do not make Eastmoney the primary dependency for 科创综指 because it is easy to block.
 - 科创综指 should clamp to its official available start, `2022-04-11`; use the official CSIndex endpoint with a short timeout to fill Tencent's early-history gap, then use Tencent real-time data for today's tail point.
+- Period stock performance must be sliced by the period boundary. Annual and monthly stock summaries should use `state.PERFORMANCE_STOCK_PAYLOAD["years"]` / `["months"]`, not lifetime stock-summary rows or the final clearing month/year. Cross-year holdings compare the period end value against the previous period-end value.
+- The realized P/L calendar should keep realized trades, daily floating P/L, and total daily movement as explicit selectable modes. Latest-trading-day floating P/L should align with the current holdings table/summary card; older dates can fall back to return-curve day points so open positions and currency conversion stay visible. Because the calendar section renders before the return curve section, its browser script must reload curve JSON after `DOMContentLoaded`.
 - After curve-source changes, update `README.md`, `.trade-tracker/README.md`, and this skill so operational rules stay aligned.
 
 ## Examples
