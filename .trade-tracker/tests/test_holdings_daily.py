@@ -79,7 +79,7 @@ class HoldingsDailyTests(unittest.TestCase):
         self.assertEqual(updated["holdings"][0]["daily_pnl"], "美元 -55.74")
         self.assertEqual(updated["daily_pnl_text"], "美元 -55.74")
 
-    def test_us_lot_becomes_old_after_next_us_session_starts(self):
+    def test_previous_day_new_lot_does_not_inherit_quote_daily_pnl(self):
         now = datetime(2026, 5, 12, 22, 0, tzinfo=ZoneInfo("Asia/Shanghai"))
         data = {
             "holdings": [
@@ -95,15 +95,69 @@ class HoldingsDailyTests(unittest.TestCase):
         updated = apply_segmented_daily_pnl(FakeCore(), [(2, stock_row())], data, now=now)
 
         self.assertEqual(market_trade_day_for_currency("美元", now), date(2026, 5, 12))
+        self.assertEqual(updated["holdings"][0]["daily_pnl"], "美元 0.00")
+        self.assertEqual(updated["daily_pnl_text"], "暂无")
+
+    def test_previous_day_new_lot_rule_applies_to_asia_markets(self):
+        now = datetime(2026, 5, 12, 10, 0, tzinfo=ZoneInfo("Asia/Shanghai"))
+        data = {
+            "holdings": [
+                {
+                    "ticker": "DEMO",
+                    "currency": "人民币",
+                    "last_price": "11.00",
+                    "daily_pnl": "人民币 +60.00",
+                }
+            ]
+        }
+
+        updated = apply_segmented_daily_pnl(
+            FakeCore(),
+            [(2, stock_row(ticker="DEMO", open_date=date(2026, 5, 11), open_price=10, currency="人民币"))],
+            data,
+            now=now,
+        )
+
+        self.assertEqual(market_trade_day_for_currency("人民币", now), date(2026, 5, 12))
+        self.assertEqual(updated["holdings"][0]["daily_pnl"], "人民币 0.00")
+        self.assertEqual(updated["daily_pnl_text"], "暂无")
+
+    def test_us_older_lot_keeps_quote_daily_pnl(self):
+        now = datetime(2026, 5, 12, 22, 0, tzinfo=ZoneInfo("Asia/Shanghai"))
+        data = {
+            "holdings": [
+                {
+                    "ticker": "SOXL",
+                    "currency": "美元",
+                    "last_price": "188.00",
+                    "daily_pnl": "美元 +60.00",
+                }
+            ]
+        }
+
+        updated = apply_segmented_daily_pnl(
+            FakeCore(),
+            [(2, stock_row(open_date=date(2026, 5, 8)))],
+            data,
+            now=now,
+        )
+
         self.assertEqual(updated["holdings"][0]["daily_pnl"], "美元 +60.00")
         self.assertNotIn("daily_pnl_text", updated)
 
-    def test_asia_markets_roll_after_local_open(self):
+    def test_us_market_day_rolls_at_new_york_midnight(self):
+        before_midnight = datetime(2026, 5, 12, 11, 30, tzinfo=ZoneInfo("Asia/Shanghai"))
+        after_midnight = datetime(2026, 5, 12, 12, 30, tzinfo=ZoneInfo("Asia/Shanghai"))
+
+        self.assertEqual(market_trade_day_for_currency("美元", before_midnight), date(2026, 5, 11))
+        self.assertEqual(market_trade_day_for_currency("美元", after_midnight), date(2026, 5, 12))
+
+    def test_asia_markets_roll_on_local_calendar_day(self):
         before_open = datetime(2026, 5, 12, 8, 30, tzinfo=ZoneInfo("Asia/Shanghai"))
         after_open = datetime(2026, 5, 12, 9, 30, tzinfo=ZoneInfo("Asia/Shanghai"))
 
-        self.assertEqual(market_trade_day_for_currency("人民币", before_open), date(2026, 5, 11))
-        self.assertEqual(market_trade_day_for_currency("港币", before_open), date(2026, 5, 11))
+        self.assertEqual(market_trade_day_for_currency("人民币", before_open), date(2026, 5, 12))
+        self.assertEqual(market_trade_day_for_currency("港币", before_open), date(2026, 5, 12))
         self.assertEqual(market_trade_day_for_currency("人民币", after_open), date(2026, 5, 12))
         self.assertEqual(market_trade_day_for_currency("港币", after_open), date(2026, 5, 12))
 

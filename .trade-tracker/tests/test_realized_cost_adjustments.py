@@ -994,6 +994,21 @@ class RealizedCostAdjustmentTests(unittest.TestCase):
         self.assertEqual(yahoo_quote["last_price"], 269.53)
         self.assertEqual(yahoo_quote["prev_close"], 270.17)
 
+        pre_market_quote = yahoo_quote_from_result(
+            FakeCore(),
+            ("AAPL", "USD"),
+            {
+                "symbol": "AAPL",
+                "shortName": "Apple Inc.",
+                "marketState": "PRE",
+                "regularMarketPrice": 269.53,
+                "preMarketPrice": 271.05,
+                "regularMarketPreviousClose": 270.17,
+            },
+        )
+        self.assertEqual(pre_market_quote["last_price"], 271.05)
+        self.assertEqual(pre_market_quote["source"], "Yahoo pre-market")
+
     def test_runtime_and_option_quotes_use_public_sources_only(self):
         self.assertEqual(RUNTIME_PACKAGES, ["openpyxl>=3.1,<4", "pandas>=2.2,<4"])
         with patch("trade_tracker.market_data.fetch_hkex_option_quote", return_value=None):

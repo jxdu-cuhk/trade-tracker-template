@@ -1248,11 +1248,26 @@ def fetch_tencent_security_quote(core, ticker, currency) -> dict | None:
     return fetch_tencent_security_quotes(core, [key]).get(key)
 
 
+def yahoo_live_price_from_result(result: dict) -> tuple[float | None, str]:
+    market_state = clean_text(result.get("marketState")).upper()
+    if market_state.startswith("PRE"):
+        fields = [("preMarketPrice", "Yahoo pre-market"), ("postMarketPrice", "Yahoo post-market"), ("regularMarketPrice", "Yahoo")]
+    elif market_state.startswith("POST") or market_state == "CLOSED":
+        fields = [("postMarketPrice", "Yahoo post-market"), ("preMarketPrice", "Yahoo pre-market"), ("regularMarketPrice", "Yahoo")]
+    else:
+        fields = [("regularMarketPrice", "Yahoo"), ("preMarketPrice", "Yahoo pre-market"), ("postMarketPrice", "Yahoo post-market")]
+    for field, source in fields:
+        value = result.get(field)
+        if isinstance(value, (int, float)) and value > 0:
+            return float(value), source
+    return None, "Yahoo"
+
+
 def fetch_yahoo_security_quote(core, ticker, currency) -> dict | None:
     key = normalize_quote_key(core, ticker, currency)
     if key[1] != "USD" or not key[0]:
         return None
-    url = f"https://query1.finance.yahoo.com/v8/finance/chart/{key[0]}?range=1d&interval=1d"
+    url = f"https://query1.finance.yahoo.com/v8/finance/chart/{key[0]}?range=1d&interval=1m&includePrePost=true"
     request = Request(url, headers={"User-Agent": "Mozilla/5.0"})
     try:
         with urlopen(request, timeout=MARKET_HTTP_TIMEOUT) as response:
@@ -1262,13 +1277,14 @@ def fetch_yahoo_security_quote(core, ticker, currency) -> dict | None:
     try:
         result = payload["chart"]["result"][0]
         meta = result.get("meta") or {}
-        last_price = meta.get("regularMarketPrice")
+        last_price, source = yahoo_live_price_from_result(meta)
         prev_close = meta.get("chartPreviousClose") or meta.get("previousClose") or meta.get("regularMarketPreviousClose")
         if not isinstance(last_price, (int, float)):
             closes = (result.get("indicators") or {}).get("quote", [{}])[0].get("close") or []
             for close in reversed(closes):
                 if isinstance(close, (int, float)) and close > 0:
                     last_price = close
+                    source = "Yahoo chart"
                     break
         if not isinstance(last_price, (int, float)):
             return None
@@ -1277,7 +1293,7 @@ def fetch_yahoo_security_quote(core, ticker, currency) -> dict | None:
             "name": key[0],
             "last_price": float(last_price),
             "prev_close": float(prev_close) if isinstance(prev_close, (int, float)) else None,
-            "source": "Yahoo",
+            "source": source,
         }
     except (KeyError, IndexError, TypeError):
         return None
@@ -1310,7 +1326,7 @@ def fetch_yahoo_security_name(core, ticker, currency) -> str:
 
 
 def yahoo_quote_from_result(core, key: tuple[str, str], result: dict) -> dict | None:
-    last_price = result.get("regularMarketPrice")
+    last_price, source = yahoo_live_price_from_result(result)
     if not isinstance(last_price, (int, float)):
         return None
     prev_close = (
@@ -1324,7 +1340,7 @@ def yahoo_quote_from_result(core, key: tuple[str, str], result: dict) -> dict | 
         "name": name,
         "last_price": float(last_price),
         "prev_close": float(prev_close) if isinstance(prev_close, (int, float)) else None,
-        "source": "Yahoo",
+        "source": source,
     }
 
 
@@ -1370,6 +1386,17 @@ def patch_quote_fetchers(core) -> None:
             return security_quote_cache[key]
         normalized_ticker, normalized_currency = key
 
+        if normalized_currency == "USD":
+            yahoo_quote = fetch_yahoo_security_quote(core, normalized_ticker, normalized_currency)
+            if quote_has_price(yahoo_quote):
+                security_quote_cache[key] = yahoo_quote
+                return yahoo_quote
+
+            tencent_quote = fetch_tencent_security_quote(core, normalized_ticker, normalized_currency)
+            if quote_has_price(tencent_quote):
+                security_quote_cache[key] = tencent_quote
+                return tencent_quote
+
         secid = infer_secid(core, normalized_ticker, normalized_currency)
         if secid:
             eastmoney_quote = fetch_eastmoney_security_quotes(core, [key]).get(key)
@@ -1385,15 +1412,16 @@ def patch_quote_fetchers(core) -> None:
                     security_quote_cache[key] = quote
                     return quote
 
-        tencent_quote = fetch_tencent_security_quote(core, normalized_ticker, normalized_currency)
-        if quote_has_price(tencent_quote):
-            security_quote_cache[key] = tencent_quote
-            return tencent_quote
+        if normalized_currency != "USD":
+            tencent_quote = fetch_tencent_security_quote(core, normalized_ticker, normalized_currency)
+            if quote_has_price(tencent_quote):
+                security_quote_cache[key] = tencent_quote
+                return tencent_quote
 
-        yahoo_quote = fetch_yahoo_security_quote(core, normalized_ticker, normalized_currency)
-        if quote_has_price(yahoo_quote):
-            security_quote_cache[key] = yahoo_quote
-            return yahoo_quote
+            yahoo_quote = fetch_yahoo_security_quote(core, normalized_ticker, normalized_currency)
+            if quote_has_price(yahoo_quote):
+                security_quote_cache[key] = yahoo_quote
+                return yahoo_quote
 
         security_quote_cache[key] = {}
         return security_quote_cache[key]
@@ -1412,10 +1440,19 @@ def patch_quote_fetchers(core) -> None:
         total = len(sorted_keys)
         emit_progress("获取行情", f"批量获取 {len(fetch_keys)} 个标的的公开行情。", 42)
 
-        tencent_quotes = fetch_tencent_security_quotes(core, fetch_keys)
+        usd_fetch_keys = [key for key in fetch_keys if key[1] == "USD"]
+        non_usd_fetch_keys = [key for key in fetch_keys if key[1] != "USD"]
+        if usd_fetch_keys:
+            yahoo_quotes = fetch_yahoo_security_quotes(core, usd_fetch_keys)
+            quotes.update(yahoo_quotes)
+            security_quote_cache.update(yahoo_quotes)
+            emit_progress("获取行情", f"Yahoo 美股扩展时段行情完成，已取到 {sum(1 for key in sorted_keys if quote_has_price(quotes.get(key)))}/{total}。", 52)
+
+        tencent_candidates = non_usd_fetch_keys + [key for key in usd_fetch_keys if not quote_has_price(quotes.get(key))]
+        tencent_quotes = fetch_tencent_security_quotes(core, tencent_candidates)
         quotes.update(tencent_quotes)
         security_quote_cache.update(tencent_quotes)
-        emit_progress("获取行情", f"腾讯批量行情完成，已取到 {sum(1 for key in sorted_keys if quote_has_price(quotes.get(key)))}/{total}。", 52)
+        emit_progress("获取行情", f"腾讯批量行情完成，已取到 {sum(1 for key in sorted_keys if quote_has_price(quotes.get(key)))}/{total}。", 56)
 
         missing_keys = [key for key in fetch_keys if not quote_has_price(quotes.get(key))]
         if missing_keys:

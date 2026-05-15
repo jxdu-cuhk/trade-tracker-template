@@ -1,6 +1,6 @@
 from __future__ import annotations
 
-from datetime import date, datetime, time, timedelta, timezone
+from datetime import date, datetime, timedelta, timezone
 from zoneinfo import ZoneInfo, ZoneInfoNotFoundError
 
 from .historical_curve import build_stock_lots, unrealized_pnl
@@ -31,24 +31,23 @@ def market_timezone_for_currency(currency: str):
         return fallback
 
 
-def market_session_start_for_currency(currency: str) -> time:
-    label = clean_text(currency).upper()
-    if label in {"美元", "USD"}:
-        return time(4, 0)
-    if label in {"港币", "HKD"}:
-        return time(9, 0)
-    return time(9, 0)
-
-
 def market_trade_day_for_currency(currency: str, now: datetime | None = None) -> date:
     current = now or datetime.now(timezone.utc)
     if current.tzinfo is None:
         current = current.replace(tzinfo=timezone.utc)
     local_now = current.astimezone(market_timezone_for_currency(currency))
     candidate = local_now.date()
-    if candidate.weekday() >= 5 or local_now.time() < market_session_start_for_currency(currency):
+    if candidate.weekday() >= 5:
         return previous_weekday(candidate)
     return candidate
+
+
+def use_entry_price_for_daily(lot, current_day: date) -> bool:
+    return lot.open_date >= current_day
+
+
+def lacks_owned_previous_close(lot, current_day: date) -> bool:
+    return 0 < (current_day - lot.open_date).days <= 1
 
 
 def sync_daily_pnl_total(data: dict[str, object]) -> None:
@@ -94,16 +93,18 @@ def apply_segmented_daily_pnl(
         original_daily = parse_display_number(holding.get("daily_pnl"))
         total_qty = sum(lot.quantity for lot in lots)
         current_day = today or market_trade_day_for_currency(key[1], now)
-        old_qty = sum(lot.quantity for lot in lots if lot.open_date < current_day)
-        today_lots = [lot for lot in lots if lot.open_date >= current_day]
+        entry_price_lots = [lot for lot in lots if use_entry_price_for_daily(lot, current_day)]
+        no_baseline_lots = [lot for lot in lots if lot not in entry_price_lots and lacks_owned_previous_close(lot, current_day)]
+        quote_daily_lots = [lot for lot in lots if lot not in entry_price_lots and lot not in no_baseline_lots]
 
-        if not today_lots:
+        if not entry_price_lots and not no_baseline_lots:
             continue
 
         old_pnl = 0.0
+        old_qty = sum(lot.quantity for lot in quote_daily_lots)
         if abs(old_qty) > EPSILON and original_daily is not None and abs(total_qty) > EPSILON:
             old_pnl = original_daily * old_qty / total_qty
-        today_pnl = sum(unrealized_pnl(lot, current_price) for lot in today_lots)
+        today_pnl = sum(unrealized_pnl(lot, current_price) for lot in entry_price_lots)
         segmented_daily = old_pnl + today_pnl
         holding["daily_pnl"] = format_money_text(key[1], segmented_daily)
         changed = True
