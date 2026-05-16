@@ -79,7 +79,7 @@ class HoldingsDailyTests(unittest.TestCase):
         self.assertEqual(updated["holdings"][0]["daily_pnl"], "美元 -55.74")
         self.assertEqual(updated["daily_pnl_text"], "美元 -55.74")
 
-    def test_previous_day_new_lot_does_not_inherit_quote_daily_pnl(self):
+    def test_previous_day_lot_keeps_quote_daily_pnl_for_displayed_market_day(self):
         now = datetime(2026, 5, 12, 22, 0, tzinfo=ZoneInfo("Asia/Shanghai"))
         data = {
             "holdings": [
@@ -95,10 +95,10 @@ class HoldingsDailyTests(unittest.TestCase):
         updated = apply_segmented_daily_pnl(FakeCore(), [(2, stock_row())], data, now=now)
 
         self.assertEqual(market_trade_day_for_currency("美元", now), date(2026, 5, 12))
-        self.assertEqual(updated["holdings"][0]["daily_pnl"], "美元 0.00")
-        self.assertEqual(updated["daily_pnl_text"], "暂无")
+        self.assertEqual(updated["holdings"][0]["daily_pnl"], "美元 +60.00")
+        self.assertNotIn("daily_pnl_text", updated)
 
-    def test_previous_day_new_lot_rule_applies_to_asia_markets(self):
+    def test_previous_day_lot_keeps_quote_daily_pnl_for_asia_markets(self):
         now = datetime(2026, 5, 12, 10, 0, tzinfo=ZoneInfo("Asia/Shanghai"))
         data = {
             "holdings": [
@@ -119,8 +119,8 @@ class HoldingsDailyTests(unittest.TestCase):
         )
 
         self.assertEqual(market_trade_day_for_currency("人民币", now), date(2026, 5, 12))
-        self.assertEqual(updated["holdings"][0]["daily_pnl"], "人民币 0.00")
-        self.assertEqual(updated["daily_pnl_text"], "暂无")
+        self.assertEqual(updated["holdings"][0]["daily_pnl"], "人民币 +60.00")
+        self.assertNotIn("daily_pnl_text", updated)
 
     def test_us_older_lot_keeps_quote_daily_pnl(self):
         now = datetime(2026, 5, 12, 22, 0, tzinfo=ZoneInfo("Asia/Shanghai"))

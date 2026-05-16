@@ -46,10 +46,6 @@ def use_entry_price_for_daily(lot, current_day: date) -> bool:
     return lot.open_date >= current_day
 
 
-def lacks_owned_previous_close(lot, current_day: date) -> bool:
-    return 0 < (current_day - lot.open_date).days <= 1
-
-
 def sync_daily_pnl_total(data: dict[str, object]) -> None:
     amounts: dict[str, float] = {}
     for holding in data.get("holdings", []) or []:
@@ -94,10 +90,9 @@ def apply_segmented_daily_pnl(
         total_qty = sum(lot.quantity for lot in lots)
         current_day = today or market_trade_day_for_currency(key[1], now)
         entry_price_lots = [lot for lot in lots if use_entry_price_for_daily(lot, current_day)]
-        no_baseline_lots = [lot for lot in lots if lot not in entry_price_lots and lacks_owned_previous_close(lot, current_day)]
-        quote_daily_lots = [lot for lot in lots if lot not in entry_price_lots and lot not in no_baseline_lots]
+        quote_daily_lots = [lot for lot in lots if lot not in entry_price_lots]
 
-        if not entry_price_lots and not no_baseline_lots:
+        if not entry_price_lots:
             continue
 
         old_pnl = 0.0

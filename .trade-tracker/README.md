@@ -32,7 +32,7 @@
 - `.trade-tracker/tools/trade_tracker/return_curve.py`: 总收益曲线、baseline、超额收益、K 线、缩放拖动、tooltip，以及指数长期缓存和增量补尾。
 - `.trade-tracker/tools/trade_tracker/historical_curve.py`: 个股真实历史行情、缓存、未实现盈亏历史曲线，以及按月/按年切片的个股收益 payload。
 - `.trade-tracker/tools/trade_tracker/holdings_overview.py`: 当前持仓顶部汇总卡、当日/本月/近三月/本年已实现盈亏。
-- `.trade-tracker/tools/trade_tracker/holdings_daily.py`: 当日持仓盈亏分段，A/H 按本地自然日，美股按纽约时间 0 点滚日；当日建仓按建仓价算，昨日新仓缺少持仓后的上一收盘基准时不继承行情源昨收涨跌。
+- `.trade-tracker/tools/trade_tracker/holdings_daily.py`: 当日持仓盈亏分段，A/H 按本地自然日，美股按纽约时间 0 点滚日；只有展示交易日当天建仓按建仓价算，已经历上一市场日收盘的仓位继承行情源昨收涨跌。
 - `.trade-tracker/tools/trade_tracker/reporting_currency.py`: 看板统一口径币种切换。
 - `.trade-tracker/tools/trade_tracker/html_tables.py`: 表格列顺序、分年度个股汇总、汇总行、上下横向滚动条、人民币折算汇总。
 - `.trade-tracker/tools/trade_tracker/overview.py`: 总体概览、分币种概览和交易费用汇总。
