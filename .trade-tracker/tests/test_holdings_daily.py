@@ -39,8 +39,10 @@ class Cell:
 def stock_row(
     ticker: str = "SOXL",
     open_date: date = date(2026, 5, 11),
+    close_date: date | None = None,
     quantity: float = 36,
     open_price: float = 187.49,
+    close_price: float | None = None,
     fee: float = 2.10,
     capital: float = 6749.64,
     currency: str = "美元",
@@ -48,11 +50,12 @@ def stock_row(
     return {
         1: Cell("股票"),
         2: Cell(open_date),
-        4: Cell(None),
+        4: Cell(close_date),
         5: Cell(ticker),
         6: Cell("现股"),
         8: Cell(quantity),
         9: Cell(open_price),
+        10: Cell(close_price),
         11: Cell(fee),
         12: Cell(capital),
         20: Cell(currency),
@@ -143,6 +146,61 @@ class HoldingsDailyTests(unittest.TestCase):
         )
 
         self.assertEqual(updated["holdings"][0]["daily_pnl"], "美元 +60.00")
+        self.assertNotIn("daily_pnl_text", updated)
+
+    def test_today_buy_on_overnight_holding_keeps_quote_daily_pnl(self):
+        today = date(2026, 5, 18)
+        data = {
+            "holdings": [
+                {
+                    "ticker": "DEMO",
+                    "currency": "人民币",
+                    "last_price": "12.00",
+                    "daily_pnl": "人民币 +220.00",
+                }
+            ]
+        }
+        rows = [
+            (2, stock_row(ticker="DEMO", open_date=date(2026, 5, 15), quantity=100, open_price=10, currency="人民币")),
+            (3, stock_row(ticker="DEMO", open_date=today, quantity=10, open_price=13, currency="人民币")),
+        ]
+
+        updated = apply_segmented_daily_pnl(FakeCore(), rows, data, today=today)
+
+        self.assertEqual(updated["holdings"][0]["daily_pnl"], "人民币 +220.00")
+        self.assertNotIn("daily_pnl_text", updated)
+
+    def test_rebuy_after_same_day_sale_of_overnight_holding_keeps_quote_daily_pnl(self):
+        today = date(2026, 5, 18)
+        data = {
+            "holdings": [
+                {
+                    "ticker": "DEMO",
+                    "currency": "人民币",
+                    "last_price": "12.00",
+                    "daily_pnl": "人民币 +220.00",
+                }
+            ]
+        }
+        rows = [
+            (
+                2,
+                stock_row(
+                    ticker="DEMO",
+                    open_date=date(2026, 5, 15),
+                    close_date=today,
+                    quantity=100,
+                    open_price=10,
+                    close_price=12,
+                    currency="人民币",
+                ),
+            ),
+            (3, stock_row(ticker="DEMO", open_date=today, quantity=100, open_price=11, currency="人民币")),
+        ]
+
+        updated = apply_segmented_daily_pnl(FakeCore(), rows, data, today=today)
+
+        self.assertEqual(updated["holdings"][0]["daily_pnl"], "人民币 +220.00")
         self.assertNotIn("daily_pnl_text", updated)
 
     def test_us_market_day_rolls_at_new_york_midnight(self):

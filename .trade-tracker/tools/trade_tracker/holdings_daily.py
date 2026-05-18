@@ -46,6 +46,15 @@ def use_entry_price_for_daily(lot, current_day: date) -> bool:
     return lot.open_date >= current_day
 
 
+def has_overnight_position(lots, current_day: date) -> bool:
+    for lot in lots:
+        if lot.open_date >= current_day:
+            continue
+        if lot.close_date is None or lot.close_date >= current_day:
+            return True
+    return False
+
+
 def sync_daily_pnl_total(data: dict[str, object]) -> None:
     amounts: dict[str, float] = {}
     for holding in data.get("holdings", []) or []:
@@ -68,11 +77,14 @@ def apply_segmented_daily_pnl(
 ) -> dict[str, object]:
     if not isinstance(data, dict):
         return data
+    all_lots_by_key = {}
     open_lots_by_key = {}
     for lot in build_stock_lots(core, rows):
+        key = (lot.ticker, lot.currency)
+        all_lots_by_key.setdefault(key, []).append(lot)
         if lot.close_date is not None:
             continue
-        open_lots_by_key.setdefault((lot.ticker, lot.currency), []).append(lot)
+        open_lots_by_key.setdefault(key, []).append(lot)
     if not open_lots_by_key:
         return data
 
@@ -89,6 +101,8 @@ def apply_segmented_daily_pnl(
         original_daily = parse_display_number(holding.get("daily_pnl"))
         total_qty = sum(lot.quantity for lot in lots)
         current_day = today or market_trade_day_for_currency(key[1], now)
+        if has_overnight_position(all_lots_by_key.get(key, []), current_day):
+            continue
         entry_price_lots = [lot for lot in lots if use_entry_price_for_daily(lot, current_day)]
         quote_daily_lots = [lot for lot in lots if lot not in entry_price_lots]
 

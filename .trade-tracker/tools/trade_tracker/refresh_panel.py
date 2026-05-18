@@ -45,18 +45,20 @@ def add_refresh_progress_panel(html_text: str) -> str:
     style = """
         <style>
         .refresh-panel {
+          display: grid;
+          grid-template-columns: minmax(180px, 0.68fr) minmax(180px, 0.32fr);
+          align-items: center;
+          gap: 10px 14px;
           margin: 0 0 14px;
-          padding: 10px 14px;
+          padding: 8px 12px;
           border: 1px solid #dbe6de;
-          border-radius: 16px;
-          background:
-            radial-gradient(circle at 92% 8%, rgba(251, 188, 4, 0.12), transparent 96px),
-            rgba(255, 255, 255, 0.94);
-          box-shadow: 0 10px 24px rgba(60, 64, 67, 0.04);
+          border-radius: 14px;
+          background: rgba(255, 255, 255, 0.86);
+          box-shadow: 0 8px 20px rgba(60, 64, 67, 0.035);
         }
 
         .refresh-panel-head {
-          display: flex;
+          display: none;
           align-items: center;
           justify-content: space-between;
           gap: 14px;
@@ -124,7 +126,7 @@ def add_refresh_progress_panel(html_text: str) -> str:
           align-items: center;
           justify-content: space-between;
           gap: 12px;
-          margin-top: 8px;
+          margin-top: 0;
           color: #466052;
           font-size: 12px;
           font-weight: 800;
@@ -158,7 +160,7 @@ def add_refresh_progress_panel(html_text: str) -> str:
 
         .refresh-progress {
           height: 6px;
-          margin-top: 6px;
+          margin-top: 0;
           overflow: hidden;
           border-radius: 999px;
           background: #dfeae3;
@@ -174,7 +176,8 @@ def add_refresh_progress_panel(html_text: str) -> str:
         }
 
         .refresh-steps {
-          display: grid;
+          display: none;
+          grid-column: 1 / -1;
           gap: 6px;
           max-height: 76px;
           margin: 8px 0 0;
@@ -214,7 +217,17 @@ def add_refresh_progress_panel(html_text: str) -> str:
           color: #6f7d73;
         }
 
+        .refresh-panel.is-running .refresh-steps,
+        .refresh-panel.is-done .refresh-steps,
+        .refresh-panel.is-error .refresh-steps {
+          display: grid;
+        }
+
         @media (max-width: 760px) {
+          .refresh-panel {
+            grid-template-columns: 1fr;
+          }
+
           .refresh-panel-head {
             display: grid;
           }
@@ -241,7 +254,7 @@ def add_refresh_progress_panel(html_text: str) -> str:
           const panel = document.getElementById('refresh-panel');
           if (!panel) return;
 
-          const button = panel.querySelector('[data-refresh-start]');
+          const buttons = Array.from(document.querySelectorAll('[data-refresh-start]'));
           const state = panel.querySelector('[data-refresh-state]');
           const percent = panel.querySelector('[data-refresh-percent]');
           const bar = panel.querySelector('[data-refresh-bar]');
@@ -250,6 +263,13 @@ def add_refresh_progress_panel(html_text: str) -> str:
           const localServer = 'http://127.0.0.1:8765';
           const apiBase = window.location.protocol === 'file:' ? localServer : '';
           let isRefreshing = false;
+
+          function setButtonsDisabled(disabled) {
+            buttons.forEach((button) => {
+              button.disabled = disabled;
+              button.classList.toggle('is-disabled', disabled);
+            });
+          }
 
           function setStatus(text, tone) {
             state.textContent = text;
@@ -285,7 +305,7 @@ def add_refresh_progress_panel(html_text: str) -> str:
           }
 
           async function checkRefreshService() {
-            button.disabled = true;
+            setButtonsDisabled(true);
             setStatus('检测刷新服务', 'is-running');
             setProgress(0);
 
@@ -298,7 +318,7 @@ def add_refresh_progress_panel(html_text: str) -> str:
             try {
               const response = await fetch(`${apiBase}/api/ping?ts=${Date.now()}`, { cache: 'no-store' });
               if (!response.ok) throw new Error(`HTTP ${response.status}`);
-              button.disabled = false;
+              setButtonsDisabled(false);
               setStatus('准备就绪', 'is-ready');
               addStep('刷新服务已连接', '点“刷新看板”后会实时显示每一步进度。', 'is-muted');
             } catch (_error) {
@@ -318,10 +338,10 @@ def add_refresh_progress_panel(html_text: str) -> str:
             }, 900);
           }
 
-          button.addEventListener('click', () => {
+          buttons.forEach((button) => button.addEventListener('click', () => {
             if (isRefreshing) return;
             isRefreshing = true;
-            button.disabled = true;
+            setButtonsDisabled(true);
             resetSteps();
             setProgress(1);
             setStatus('刷新中', 'is-running');
@@ -363,7 +383,7 @@ def add_refresh_progress_panel(html_text: str) -> str:
               finished = true;
               source.close();
               isRefreshing = false;
-              button.disabled = false;
+              setButtonsDisabled(false);
               setStatus('刷新失败', 'is-error');
               addStep(payload.step || '刷新失败', payload.detail || '连接断开或生成器报错。', 'is-error');
             });
@@ -373,11 +393,11 @@ def add_refresh_progress_panel(html_text: str) -> str:
               finished = true;
               source.close();
               isRefreshing = false;
-              button.disabled = false;
+              setButtonsDisabled(false);
               setStatus('刷新失败', 'is-error');
               addStep('连接中断', '本地刷新服务没有返回完成信号，可以看一下命令窗口里的错误。', 'is-error');
             };
-          });
+          }));
 
           if (document.readyState === 'loading') {
             document.addEventListener('DOMContentLoaded', checkRefreshService);

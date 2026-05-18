@@ -5,6 +5,7 @@ import json
 from dataclasses import dataclass
 from datetime import date
 
+from . import state
 from .market_data import display_currency_label
 from .options import option_strategy_capital
 from .settings import OPTION_EVENTS
@@ -197,13 +198,25 @@ def trade_payload(trade: RealizedTrade) -> dict[str, object]:
     }
 
 
-def json_payload(trades: list[RealizedTrade]) -> str:
+def json_for_script(payload: object) -> str:
     text = json.dumps(
-        {"trades": [trade_payload(trade) for trade in trades]},
+        payload,
         ensure_ascii=False,
         separators=(",", ":"),
     )
     return text.replace("&", "\\u0026").replace("<", "\\u003c").replace(">", "\\u003e")
+
+
+def json_payload(trades: list[RealizedTrade]) -> str:
+    return json_for_script({"trades": [trade_payload(trade) for trade in trades]})
+
+
+def realized_json_payload(core, rows: list[tuple[int, dict[int, object]]]) -> str:
+    realized = state.DISPLAY_PAYLOAD.get("realized") if isinstance(state.DISPLAY_PAYLOAD, dict) else None
+    trades = realized.get("trades") if isinstance(realized, dict) else None
+    if isinstance(trades, list):
+        return json_for_script({"trades": trades})
+    return json_payload(build_realized_trades(core, rows))
 
 
 def th(css_class: str, sort_type: str, label: str) -> str:
@@ -336,6 +349,14 @@ def render_realized_filter_script() -> str:
             payload = { trades: [] };
           }
           const trades = Array.isArray(payload.trades) ? payload.trades.filter((trade) => trade && trade.date) : [];
+          const displayPayloadNode = section.querySelector('[data-display-payload]');
+          let displayPayload = {};
+          try {
+            displayPayload = JSON.parse(displayPayloadNode ? displayPayloadNode.textContent : '{}');
+          } catch (_error) {
+            displayPayload = {};
+          }
+          const realizedDailyByDate = displayPayload?.realized?.daily?.byDate || displayPayload?.realizedDaily?.byDate || {};
           let curveSeries = [];
           const curveSeriesByScope = new Map();
           let curveSourceText = '';
@@ -410,8 +431,12 @@ def render_realized_filter_script() -> str:
             return String(trade.currency || '未标注币种');
           }
 
+          function matchesCurrencyLabel(currency) {
+            return currencySelect.value === 'all' || String(currency || '') === currencySelect.value;
+          }
+
           function matchesCurrency(trade) {
-            return currencySelect.value === 'all' || tradeCurrency(trade) === currencySelect.value;
+            return matchesCurrencyLabel(tradeCurrency(trade));
           }
 
           function number(value) {
@@ -546,12 +571,36 @@ def render_realized_filter_script() -> str:
           }
 
           function realizedConvertedForDay(iso) {
+            const daily = realizedDailyForDay(iso);
+            if (daily) {
+              if (currencySelect.value === 'all') {
+                const payloadValue = optionalNumber(daily.pnlCny);
+                if (Number.isFinite(payloadValue)) return payloadValue;
+              }
+              const bucket = daily.byCurrency?.[currencySelect.value];
+              const payloadValue = optionalNumber(bucket?.cny);
+              return Number.isFinite(payloadValue) ? payloadValue : 0;
+            }
             return tradesForDay(iso).reduce((total, trade) => total + number(trade.pnl) * rateToCnyForCurrency(tradeCurrency(trade)), 0);
           }
 
+          function realizedDailyForDay(iso) {
+            const daily = realizedDailyByDate?.[iso];
+            return daily && typeof daily === 'object' ? daily : null;
+          }
+
           function currentHoldingDailyFloatCny() {
-            const table = document.querySelector('table[data-summary-kind="holdings"]');
             const selectedCurrency = currencySelect.value;
+            const currentDaily = displayPayload?.dailyPnl?.current;
+            if (selectedCurrency === 'all') {
+              const payloadValue = optionalNumber(currentDaily?.holdingFloatCny);
+              if (Number.isFinite(payloadValue)) return payloadValue;
+            } else {
+              const payloadCurrency = currentDaily?.byCurrency?.[selectedCurrency];
+              const payloadValue = optionalNumber(payloadCurrency?.cny);
+              if (Number.isFinite(payloadValue)) return payloadValue;
+            }
+            const table = document.querySelector('table[data-summary-kind="holdings"]');
             let tableTotal = 0;
             let hasTableValue = false;
             if (table) {
@@ -709,6 +758,17 @@ def render_realized_filter_script() -> str:
           }
 
           function statsForDay(iso) {
+            const daily = realizedDailyForDay(iso);
+            if (daily && daily.byCurrency) {
+              return Object.values(daily.byCurrency)
+                .filter((item) => item && matchesCurrencyLabel(item.currency))
+                .map((item) => ({
+                  currency: String(item.currency || '未标注币种'),
+                  count: number(item.count),
+                  pnl: number(item.native),
+                }))
+                .sort((a, b) => a.currency.localeCompare(b.currency, 'zh-CN'));
+            }
             const stats = new Map();
             tradesForDay(iso).forEach((trade) => {
               const currency = tradeCurrency(trade);
@@ -1041,9 +1101,9 @@ def render_realized_filter_script() -> str:
 
 
 def render_realized_analysis_section(core, rows: list[tuple[int, dict[int, object]]]) -> str:
-    trades = build_realized_trades(core, rows)
     body = (
-        f'<script type="application/json" data-realized-payload>{json_payload(trades)}</script>'
+        f'<script type="application/json" data-realized-payload>{realized_json_payload(core, rows)}</script>'
+        f'<script type="application/json" data-display-payload>{json_for_script(state.DISPLAY_PAYLOAD)}</script>'
         + render_calendar_panel()
         + render_stage_panel()
         + render_realized_filter_script()

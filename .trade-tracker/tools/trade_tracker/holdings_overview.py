@@ -5,6 +5,8 @@ import calendar
 import re
 from datetime import date, timedelta
 
+from . import state
+from .display_payload import holdings_metrics_from_payload
 from .historical_curve import build_stock_lots, close_for_day, fetch_histories_for_lots, unrealized_pnl
 from .html_tables import body_rows, cell_text, money_for_label, summary_table_match, table_labels, text_for_label
 from .market_data import current_fx_rates_to_cny, display_currency_label
@@ -106,6 +108,10 @@ def holdings_metrics_from_table(core, table_html: str, rows: list[tuple[int, dic
     totals["asset"] -= open_short_put_reserve_cny(core, rows, rates)
     totals["count"] = float(count)
     return totals
+
+
+def holdings_metrics_from_display_payload(payload: dict[str, object]) -> dict[str, float]:
+    return holdings_metrics_from_payload(payload)
 
 
 def shift_months(day: date, months: int) -> date:
@@ -524,7 +530,9 @@ def insert_holdings_account_overview(core, html_text: str, rows: list[tuple[int,
     insertion_index = html_text.find('<div class="summary-wrap">', title_index)
     if insertion_index < 0 or insertion_index > table_match.start():
         return html_text
-    metrics = holdings_metrics_from_table(core, table_match.group(0), rows)
+    metrics = holdings_metrics_from_display_payload(state.DISPLAY_PAYLOAD)
+    if not metrics:
+        metrics = holdings_metrics_from_table(core, table_match.group(0), rows)
     month = realized_range_metrics(core, rows)
     reference = reference_float_metrics(core, rows, metrics)
     panel = render_holdings_account_panel(metrics, month, reference)

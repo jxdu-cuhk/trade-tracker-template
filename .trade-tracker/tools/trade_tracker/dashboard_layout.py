@@ -11,14 +11,15 @@ from .utils import cell_text, clean_text
 SECTION_ORDER = [
     "当前持仓",
     "未平仓期权",
+    "总收益曲线",
+    "收益报告",
+    "总体概览",
     "盈亏日历 / 阶段账单",
     "清仓分析",
     "期权收益分析",
-    "总体概览",
-    "总收益曲线",
-    "收益报告",
     "分年度个股汇总",
     "交易时间线",
+    "工作表入口",
 ]
 DEFAULT_OPEN_SECTIONS = {"当前持仓", "未平仓期权"}
 
@@ -84,10 +85,16 @@ def collapse_secondary_sections(html_text: str) -> str:
 
 DASHBOARD_PAGER_HTML = """
 <div class="dashboard-topbar" data-dashboard-topbar>
-  <nav class="dashboard-page-tabs" data-dashboard-page-tabs aria-label="看板分页"></nav>
-  <div class="dashboard-currency-switcher" data-dashboard-currency-switcher aria-label="统一口径币种">
-    <span>统一口径</span>
-    {buttons}
+  <div class="dashboard-topbar-main">
+    <span class="dashboard-topbar-label">看板</span>
+    <nav class="dashboard-page-tabs" data-dashboard-page-tabs aria-label="看板分页"></nav>
+  </div>
+  <div class="dashboard-top-actions">
+    <button class="dashboard-top-refresh" type="button" data-refresh-start>刷新</button>
+    <div class="dashboard-currency-switcher" data-dashboard-currency-switcher aria-label="统一口径币种">
+      <span>统一口径</span>
+      {buttons}
+    </div>
   </div>
 </div>
 """
@@ -120,8 +127,42 @@ DASHBOARD_PAGER_SCRIPT = """
       return title.replace(/\\s+/g, "-").replace(/[^\\w\\u4e00-\\u9fff-]+/g, "-");
     }
 
+    var pageGroups = [
+      { key: "positions", label: "持仓", titles: ["当前持仓", "未平仓期权"] },
+      { key: "returns", label: "收益", titles: ["总收益曲线", "收益报告", "总体概览"] },
+      { key: "review", label: "复盘", titles: ["盈亏日历 / 阶段账单", "清仓分析", "期权收益分析"] },
+      { key: "details", label: "明细", titles: ["分年度个股汇总", "交易时间线", "工作表入口"] }
+    ];
+    var titleToSection = new Map();
+    sections.forEach(function(section) {
+      titleToSection.set(titleFor(section), section);
+    });
+    var activeGroups = pageGroups
+      .map(function(group) {
+        var availableTitles = group.titles.filter(function(title) { return titleToSection.has(title); });
+        return Object.assign({}, group, { titles: availableTitles });
+      })
+      .filter(function(group) { return group.titles.length > 0; });
+    var groupedTitles = new Set();
+    activeGroups.forEach(function(group) {
+      group.titles.forEach(function(title, index) {
+        groupedTitles.add(title);
+        var section = titleToSection.get(title);
+        if (section) {
+          section.dataset.dashboardPageGroup = group.key;
+          section.dataset.dashboardPageRole = index === 0 ? "primary" : "supporting";
+        }
+      });
+    });
+    var ungroupedTitles = sections.map(titleFor).filter(function(title) { return title && !groupedTitles.has(title); });
+    if (ungroupedTitles.length) {
+      activeGroups.push({ key: "other", label: "其他", titles: ungroupedTitles });
+    }
+
     function setActive(targetKey) {
       var showAll = targetKey === "all";
+      var activeGroup = activeGroups.find(function(group) { return group.key === targetKey; });
+      var activeTitles = new Set(activeGroup ? activeGroup.titles : []);
       tabs.querySelectorAll("[data-dashboard-page]").forEach(function(button) {
         var active = button.dataset.dashboardPage === targetKey;
         button.classList.toggle("is-active", active);
@@ -129,8 +170,10 @@ DASHBOARD_PAGER_SCRIPT = """
       });
       sections.forEach(function(section) {
         var title = titleFor(section);
-        var active = showAll || keyFor(title) === targetKey;
+        var active = showAll || activeTitles.has(title);
         section.hidden = !active;
+        section.classList.toggle("dashboard-section-primary", active && section.dataset.dashboardPageRole === "primary");
+        section.classList.toggle("dashboard-section-supporting", active && section.dataset.dashboardPageRole === "supporting");
         if (active && !section.open) section.open = true;
       });
       try {
@@ -153,6 +196,7 @@ DASHBOARD_PAGER_SCRIPT = """
       button.dataset.dashboardPage = key;
       button.setAttribute("role", "tab");
       button.setAttribute("aria-selected", "false");
+      button.title = label;
       button.textContent = label;
       button.addEventListener("click", function() {
         setActive(key);
@@ -161,9 +205,8 @@ DASHBOARD_PAGER_SCRIPT = """
       tabs.appendChild(button);
     }
 
-    sections.forEach(function(section) {
-      var title = titleFor(section);
-      if (title) addButton(title, keyFor(title));
+    activeGroups.forEach(function(group) {
+      addButton(group.label, group.key);
     });
     addButton("全部", "all");
 
@@ -171,7 +214,7 @@ DASHBOARD_PAGER_SCRIPT = """
     try {
       stored = window.localStorage.getItem("trade-tracker-active-page-v1") || "";
     } catch (error) {}
-    var firstKey = sections[0] ? keyFor(titleFor(sections[0])) : "all";
+    var firstKey = activeGroups[0] ? activeGroups[0].key : "all";
     var target = stored && (stored === "all" || tabs.querySelector('[data-dashboard-page="' + stored + '"]'))
       ? stored
       : firstKey;

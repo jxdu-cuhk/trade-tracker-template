@@ -364,7 +364,7 @@ class RealizedCostAdjustmentTests(unittest.TestCase):
         self.assertEqual(patched["holdings"][0]["daily_pnl"], "美元 -21.54")
         self.assertEqual(patched["daily_pnl_text"], "美元 -21.54")
 
-    def test_segmented_daily_pnl_keeps_prev_close_move_for_old_lots(self):
+    def test_segmented_daily_pnl_keeps_quote_daily_pnl_for_t_operations(self):
         today = date(2026, 5, 11)
         rows = [
             (
@@ -411,8 +411,8 @@ class RealizedCostAdjustmentTests(unittest.TestCase):
 
         patched = apply_segmented_daily_pnl(FakeCore(), rows, data, today=today)
 
-        self.assertEqual(patched["holdings"][0]["daily_pnl"], "美元 189.50")
-        self.assertEqual(patched["daily_pnl_text"], "美元 189.50")
+        self.assertEqual(patched["holdings"][0]["daily_pnl"], "美元 220.00")
+        self.assertEqual(patched["daily_pnl_text"], "美元 220.00")
 
     def test_dividend_income_reduces_current_holding_cost_without_double_counting(self):
         current_year = str(date.today().year)

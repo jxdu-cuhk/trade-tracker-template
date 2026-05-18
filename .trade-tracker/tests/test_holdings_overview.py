@@ -11,6 +11,7 @@ TOOLS_DIR = Path(__file__).resolve().parents[1] / "tools"
 sys.path.insert(0, str(TOOLS_DIR))
 
 from trade_tracker.holdings_overview import (
+    holdings_metrics_from_display_payload,
     holdings_metrics_from_table,
     reference_float_metrics,
     render_holdings_account_panel,
@@ -94,6 +95,27 @@ class HoldingsOverviewTests(unittest.TestCase):
 
         self.assertEqual(metrics["asset"], 110)
         self.assertEqual(metrics["market_value"], 5110)
+
+    def test_holdings_metrics_can_read_unified_display_payload(self):
+        metrics = holdings_metrics_from_display_payload(
+            {
+                "holdingsTotals": {
+                    "assetCny": 60,
+                    "marketValueCny": 140,
+                    "costCny": 130,
+                    "floatPnlCny": 10,
+                    "dailyPnlCny": 1,
+                    "count": 2,
+                }
+            }
+        )
+
+        self.assertEqual(metrics["asset"], 60)
+        self.assertEqual(metrics["market_value"], 140)
+        self.assertEqual(metrics["cost"], 130)
+        self.assertEqual(metrics["float_pnl"], 10)
+        self.assertEqual(metrics["daily_pnl"], 1)
+        self.assertEqual(metrics["count"], 2)
 
     def test_render_holdings_account_panel_uses_selectable_realized_ranges(self):
         html = render_holdings_account_panel(

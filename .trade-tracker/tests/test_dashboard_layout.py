@@ -38,6 +38,7 @@ class DashboardLayoutTests(unittest.TestCase):
             + section("分年度个股汇总")
             + section("盈亏日历 / 阶段账单")
             + section("清仓分析")
+            + section("期权收益分析")
             + section("收益报告")
             + section("交易时间线")
             + section("工作表入口")
@@ -48,11 +49,12 @@ class DashboardLayoutTests(unittest.TestCase):
         titles = [
             "当前持仓",
             "未平仓期权",
-            "盈亏日历 / 阶段账单",
-            "清仓分析",
-            "总体概览",
             "总收益曲线",
             "收益报告",
+            "总体概览",
+            "盈亏日历 / 阶段账单",
+            "清仓分析",
+            "期权收益分析",
             "分年度个股汇总",
             "交易时间线",
             "工作表入口",
@@ -76,6 +78,14 @@ class DashboardLayoutTests(unittest.TestCase):
             updated_again = insert_dashboard_page_tabs(updated)
 
         self.assertIn("data-dashboard-page-tabs", updated)
+        self.assertIn("dashboard-top-refresh", updated)
+        self.assertIn("pageGroups", updated)
+        self.assertIn('key: "positions"', updated)
+        self.assertIn('key: "returns"', updated)
+        self.assertIn('key: "review"', updated)
+        self.assertIn('key: "details"', updated)
+        self.assertIn("dashboard-section-primary", updated)
+        self.assertIn("dashboard-section-supporting", updated)
         self.assertIn("data-dashboard-currency-switcher", updated)
         self.assertIn('data-reporting-currency="港币"', updated)
         self.assertIn("trade-tracker-reporting-currency-v1", updated)

@@ -13,6 +13,7 @@ from .dashboard_layout import (
     insert_dashboard_page_tabs,
     reorder_dashboard_sections,
 )
+from .display_payload import build_display_payload
 from .dividends import load_dividend_events
 from .html_tables import (
     add_balanced_summary_table_script,
@@ -168,7 +169,10 @@ def patch_core(core, workbook_path: Path) -> None:
                     currency = str(series.get("currency") or "")
                     series["capital"] = current_base_by_currency.get(currency) or capital_by_currency.get(currency, 0.0)
             data = attach_dynamic_curve_capital(core, rows, data)
+            state.DISPLAY_PAYLOAD = build_display_payload(core, rows, data)
+            data["display_payload"] = state.DISPLAY_PAYLOAD
             return data
+        state.DISPLAY_PAYLOAD = {}
         return data
 
     def patched_load_dividend_events():
