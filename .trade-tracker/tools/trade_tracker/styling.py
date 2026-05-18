@@ -130,17 +130,38 @@ def compact_preview_table_spacing(output_dir: Path) -> None:
 }}
 
 .dashboard-section {{
+  margin: 0 0 14px;
   border-color: rgba(219, 230, 222, 0.92);
   border-radius: 14px;
+  scroll-margin-top: 96px;
   box-shadow: 0 12px 28px rgba(60, 64, 67, 0.055);
 }}
 
+html[data-dashboard-page] .dashboard-section[hidden] {{
+  display: none !important;
+}}
+
 .dashboard-section-primary {{
+  position: relative;
   border-color: rgba(255, 47, 69, 0.18);
-  box-shadow: 0 14px 34px rgba(60, 64, 67, 0.07);
+  box-shadow: 0 16px 38px rgba(60, 64, 67, 0.075);
+}}
+
+.dashboard-section-primary::before {{
+  content: "";
+  position: absolute;
+  inset: 0 0 auto;
+  height: 3px;
+  background: linear-gradient(90deg, #ff2f45, #ff7a1a);
+}}
+
+html[data-dashboard-page]:not([data-dashboard-page="all"]) .dashboard-section-primary {{
+  margin-bottom: 16px;
 }}
 
 .dashboard-section-supporting {{
+  border-color: rgba(226, 234, 229, 0.92);
+  background: linear-gradient(180deg, rgba(255, 255, 255, 0.99), rgba(250, 252, 251, 0.98));
   box-shadow: 0 8px 22px rgba(60, 64, 67, 0.04);
 }}
 
@@ -183,8 +204,159 @@ def compact_preview_table_spacing(output_dir: Path) -> None:
   line-height: 1.42;
 }}
 
+html[data-dashboard-page]:not([data-dashboard-page="all"]) .dashboard-section-supporting .section-note {{
+  display: none;
+}}
+
 .dashboard-section-supporting .section-body {{
   padding-bottom: 16px;
+}}
+
+.capital-quality-shell {{
+  display: grid;
+  gap: 14px;
+}}
+
+.capital-quality-status {{
+  display: inline-flex;
+  align-items: center;
+  justify-self: start;
+  gap: 8px;
+  min-height: 28px;
+  border-radius: 999px;
+  padding: 0 10px;
+  background: #eef7f0;
+  color: #137333;
+  font-size: 12px;
+  font-weight: 850;
+}}
+
+.capital-quality-status span {{
+  color: #66736b;
+}}
+
+.capital-quality-status.is-warn {{
+  background: #fff7e0;
+  color: #9a6700;
+}}
+
+.capital-quality-status.is-danger {{
+  background: #fce8e6;
+  color: #d93025;
+}}
+
+.capital-quality-grid {{
+  display: grid;
+  grid-template-columns: repeat(4, minmax(0, 1fr));
+  gap: 10px;
+}}
+
+.capital-quality-metric {{
+  display: grid;
+  gap: 6px;
+  min-width: 0;
+  min-height: 104px;
+  align-content: center;
+  border: 1px solid #edf0f2;
+  border-radius: 12px;
+  background: #ffffff;
+  padding: 14px;
+}}
+
+.capital-quality-metric span,
+.capital-quality-card li span {{
+  color: #66736b;
+  font-size: 12px;
+  font-weight: 800;
+}}
+
+.capital-quality-metric strong {{
+  color: #202124;
+  font-size: 22px;
+  line-height: 1.1;
+  white-space: nowrap;
+}}
+
+.capital-quality-metric strong.value-positive {{
+  color: #d93025;
+}}
+
+.capital-quality-metric strong.value-negative {{
+  color: #137333;
+}}
+
+.capital-quality-metric em,
+.capital-quality-card li em {{
+  color: #8a958f;
+  font-size: 11px;
+  font-style: normal;
+  line-height: 1.35;
+}}
+
+.capital-quality-columns {{
+  display: grid;
+  grid-template-columns: minmax(0, 1fr) minmax(0, 1fr);
+  gap: 12px;
+}}
+
+.capital-quality-card {{
+  border: 1px solid #edf0f2;
+  border-radius: 12px;
+  background: #ffffff;
+  padding: 14px;
+}}
+
+.capital-quality-card h3 {{
+  margin: 0 0 10px;
+  color: #202124;
+  font-size: 14px;
+  font-weight: 900;
+}}
+
+.capital-quality-breakdown,
+.capital-quality-list {{
+  display: grid;
+  gap: 8px;
+  margin: 0;
+  padding: 0;
+  list-style: none;
+}}
+
+.capital-quality-card li {{
+  display: grid;
+  grid-template-columns: minmax(90px, 0.28fr) minmax(0, 0.32fr) minmax(0, 0.4fr);
+  gap: 10px;
+  align-items: baseline;
+  min-width: 0;
+  border-radius: 10px;
+  background: #f8faf9;
+  padding: 9px 10px;
+}}
+
+.capital-quality-card li strong {{
+  color: #202124;
+  font-size: 13px;
+  font-weight: 900;
+}}
+
+.capital-quality-list li {{
+  grid-template-columns: minmax(82px, 0.28fr) minmax(0, 1fr);
+}}
+
+.capital-quality-list li strong {{
+  font-weight: 850;
+}}
+
+.capital-quality-card li.is-good strong {{
+  color: #137333;
+}}
+
+.capital-quality-card li.is-warn strong {{
+  color: #9a6700;
+}}
+
+.capital-quality-card li.is-danger strong {{
+  color: #d93025;
 }}
 
 .metric-card {{
@@ -1606,6 +1778,71 @@ details[data-ths-return-curve] .ths-curve-bars div:nth-child(2) strong {{
   color: #ffffff;
 }}
 
+.transaction-tag-toolbar {{
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  flex-wrap: wrap;
+  margin: 0 0 12px;
+}}
+
+.transaction-tag-filters {{
+  display: flex;
+  flex-wrap: wrap;
+  gap: 6px;
+}}
+
+.transaction-tag-filter {{
+  appearance: none;
+  border: 1px solid #dbe6de;
+  border-radius: 999px;
+  background: #f8fbf9;
+  color: #4f5d55;
+  cursor: pointer;
+  font-size: 12px;
+  font-weight: 800;
+  line-height: 1;
+  padding: 7px 10px;
+}}
+
+.transaction-tag-filter.is-active {{
+  border-color: #ff2f45;
+  background: #ff2f45;
+  color: #fff;
+}}
+
+.transaction-tag-filter small {{
+  opacity: 0.72;
+  font-size: 10px;
+}}
+
+.transaction-tag-status,
+.transaction-tag-hint {{
+  color: #63766b;
+  font-size: 12px;
+  font-weight: 700;
+}}
+
+.transaction-tag-cell {{
+  min-width: 104px;
+}}
+
+.transaction-tag-chip {{
+  display: inline-flex;
+  align-items: center;
+  max-width: 100%;
+  margin: 1px 4px 1px 0;
+  padding: 3px 7px;
+  border-radius: 999px;
+  background: #fff2f4;
+  color: #d93025;
+  font-size: 11px;
+  font-weight: 800;
+  line-height: 1.15;
+  vertical-align: middle;
+  white-space: nowrap;
+}}
+
 .realized-date-input {{
   min-width: 148px;
 }}
@@ -1786,7 +2023,7 @@ details[data-ths-return-curve] .ths-curve-bars div:nth-child(2) strong {{
   grid-template-columns: minmax(0, 1fr) auto;
   gap: 12px;
   align-items: center;
-  margin: 0 0 14px;
+  margin: 0 0 16px;
   border: 1px solid #edf0f2;
   border-radius: 14px;
   background: rgba(255, 255, 255, 0.94);
@@ -1813,14 +2050,27 @@ details[data-ths-return-curve] .ths-curve-bars div:nth-child(2) strong {{
 
 .dashboard-page-tabs {{
   display: flex;
-  flex-wrap: wrap;
+  flex-wrap: nowrap;
   gap: 6px;
   align-items: center;
   min-width: 0;
+  overflow-x: auto;
+  scrollbar-width: thin;
+  scrollbar-color: #d7e0dc transparent;
+}}
+
+.dashboard-page-tabs::-webkit-scrollbar {{
+  height: 4px;
+}}
+
+.dashboard-page-tabs::-webkit-scrollbar-thumb {{
+  border-radius: 999px;
+  background: #d7e0dc;
 }}
 
 .dashboard-page-tab {{
   appearance: none;
+  flex: 0 0 auto;
   min-height: 32px;
   border: 1px solid #e2e7ea;
   border-radius: 999px;
@@ -1851,6 +2101,63 @@ details[data-ths-return-curve] .ths-curve-bars div:nth-child(2) strong {{
   background: #ff2f45;
   color: #ffffff;
   box-shadow: 0 8px 18px rgba(255, 47, 69, 0.16);
+}}
+
+.dashboard-section-tabs {{
+  grid-column: 2;
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  min-width: 0;
+  overflow-x: auto;
+  scrollbar-width: thin;
+  scrollbar-color: #dde5e1 transparent;
+}}
+
+.dashboard-section-tabs[hidden] {{
+  display: none;
+}}
+
+.dashboard-section-tabs::-webkit-scrollbar {{
+  height: 4px;
+}}
+
+.dashboard-section-tabs::-webkit-scrollbar-thumb {{
+  border-radius: 999px;
+  background: #dde5e1;
+}}
+
+.dashboard-section-tab {{
+  appearance: none;
+  flex: 0 0 auto;
+  min-height: 26px;
+  border: 1px solid transparent;
+  border-radius: 999px;
+  background: transparent;
+  color: #78846f;
+  cursor: pointer;
+  font: inherit;
+  font-size: 11px;
+  font-weight: 800;
+  padding: 0 9px;
+  white-space: nowrap;
+}}
+
+.dashboard-section-tab:hover,
+.dashboard-section-tab:focus-visible {{
+  background: #f5f8f6;
+  color: #202124;
+}}
+
+.dashboard-section-tab:focus-visible {{
+  outline: 2px solid rgba(255, 47, 69, 0.14);
+  outline-offset: 2px;
+}}
+
+.dashboard-section-tab.is-active {{
+  border-color: rgba(255, 47, 69, 0.18);
+  background: #fff5f6;
+  color: #ff2f45;
 }}
 
 .dashboard-top-actions {{
@@ -2623,6 +2930,17 @@ details[data-ths-return-curve] .ths-curve-bars div:nth-child(2) strong {{
     grid-column: span 12;
   }}
 
+  .capital-quality-grid,
+  .capital-quality-columns {{
+    grid-template-columns: 1fr;
+  }}
+
+  .capital-quality-card li,
+  .capital-quality-list li {{
+    grid-template-columns: 1fr;
+    gap: 4px;
+  }}
+
   .holdings-account-metric {{
     min-height: 0;
     padding: 13px 14px;
@@ -2661,6 +2979,21 @@ details[data-ths-return-curve] .ths-curve-bars div:nth-child(2) strong {{
     flex: 1;
   }}
 
+  .dashboard-page-tabs {{
+    flex-wrap: wrap;
+    overflow-x: visible;
+  }}
+
+  .dashboard-section-tabs {{
+    grid-column: 1 / -1;
+    flex-wrap: wrap;
+    overflow-x: visible;
+  }}
+
+  .dashboard-section-tab {{
+    flex: 1 1 auto;
+  }}
+
   .dashboard-page-tab {{
     flex: 1 1 calc(50% - 8px);
     padding-inline: 10px;
@@ -2668,6 +3001,18 @@ details[data-ths-return-curve] .ths-curve-bars div:nth-child(2) strong {{
 
   .realized-day-metrics {{
     grid-template-columns: 1fr;
+  }}
+
+  .transaction-tag-toolbar {{
+    align-items: stretch;
+  }}
+
+  .transaction-tag-filters {{
+    width: 100%;
+  }}
+
+  .transaction-tag-filter {{
+    flex: 1 1 auto;
   }}
 
   .metric-card-hero,

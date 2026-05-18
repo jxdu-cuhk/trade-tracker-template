@@ -9,6 +9,7 @@ from pathlib import Path
 TOOLS_DIR = Path(__file__).resolve().parents[1] / "tools"
 sys.path.insert(0, str(TOOLS_DIR))
 
+from trade_tracker import state
 from trade_tracker.realized_analysis import (
     build_realized_trades,
     insert_realized_analysis_section,
@@ -75,6 +76,11 @@ class FakeCore:
 
 
 class RealizedAnalysisTests(unittest.TestCase):
+    def setUp(self):
+        state.TRANSACTION_TAGS_BY_ROW = {}
+        state.TRANSACTION_TAGS_PAYLOAD = {}
+        state.TRANSACTION_TAG_COLUMN = None
+
     def test_realized_trades_use_close_date_and_skip_open_rows(self):
         trades = build_realized_trades(
             FakeCore(),
@@ -127,6 +133,31 @@ class RealizedAnalysisTests(unittest.TestCase):
         self.assertEqual(trades[0].category, "期权")
         self.assertEqual(trades[1].category, "股票")
         self.assertEqual(trades[1].date_iso, "2026-01-10")
+
+    def test_realized_trades_carry_transaction_tags(self):
+        state.TRANSACTION_TAGS_BY_ROW = {2: ["波段", "AI"]}
+
+        trades = build_realized_trades(
+            FakeCore(),
+            [
+                (
+                    2,
+                    row(
+                        kind="股票",
+                        open_date=date(2026, 1, 5),
+                        close_date=date(2026, 1, 10),
+                        ticker="ticker_a",
+                        event="现股",
+                        qty=100,
+                        capital=1000,
+                        pnl=120,
+                        currency="人民币",
+                    ),
+                )
+            ],
+        )
+
+        self.assertEqual(trades[0].tags, ("波段", "AI"))
 
     def test_daily_summary_groups_by_realized_day_and_currency(self):
         trades = build_realized_trades(
@@ -229,6 +260,10 @@ class RealizedAnalysisTests(unittest.TestCase):
         self.assertIn('data-calendar-mode="realized"', section)
         self.assertIn('data-calendar-mode="float"', section)
         self.assertIn('data-calendar-mode="total"', section)
+        self.assertIn("js-realized-tag", section)
+        self.assertIn('"tags":[]', section)
+        self.assertIn("matchesTag", section)
+        self.assertIn("transaction-tag-cell", section)
         self.assertIn('class="filter-select realized-date-input js-stage-start"', section)
         self.assertIn('class="filter-select realized-date-input js-stage-end"', section)
         self.assertIn('"date":"2026-03-08"', section)

@@ -5,6 +5,7 @@ from pathlib import Path
 from . import state
 from .analytics import build_holding_days_map, build_last_clear_date_map, build_summary_holding_days_maps
 from .branding import brand_dashboard_html, brand_launcher_html
+from .capital_quality import insert_capital_quality_section
 from .clearance_analysis import insert_clearance_analysis_section
 from .curve_capital import attach_dynamic_curve_capital
 from .dashboard_layout import (
@@ -52,6 +53,7 @@ from .realized_analysis import insert_realized_analysis_section
 from .return_curve import render_tonghuashun_curve_panels
 from .runtime import emit_progress
 from .settings import HOLDINGS_COLUMN_ORDER
+from .transaction_tags import initialize_transaction_tags, insert_transaction_tags
 from .utils import clean_name, parse_display_number
 
 
@@ -77,6 +79,7 @@ def patch_core(core, workbook_path: Path) -> None:
     state.HOLDING_DAYS_MAP = build_holding_days_map(core, workbook_path)
     emit_progress("分析年度汇总", "累计每只股票跨年份持有天数。", 30)
     state.SUMMARY_HOLDING_DAYS_MAP, state.ANNUAL_HOLDING_DAYS_MAP = build_summary_holding_days_maps(core, workbook_path)
+    state.TRANSACTION_TAGS_PAYLOAD = initialize_transaction_tags(workbook_path)
 
     def lookup_security_name(ticker, currency="", allow_online=False):
         normalized_ticker = core.normalize_ticker(ticker, currency)
@@ -204,10 +207,12 @@ def patch_core(core, workbook_path: Path) -> None:
         html = align_annual_summary_with_stock_summary(html)
         html = prioritize_annual_summary_filter(html)
         html = insert_holdings_account_overview(core, html, rows)
+        html = insert_capital_quality_section(html)
         html = insert_realized_analysis_section(core, html, rows)
         html = insert_clearance_analysis_section(core, html, rows)
         html = insert_option_analysis_section(core, html, rows)
         html = remove_stock_summary_section(html)
+        html = insert_transaction_tags(html, rows)
         html = apply_tonghuashun_curve_style(html)
         html = insert_performance_report_section(html)
         html = reorder_dashboard_sections(html)

@@ -8,19 +8,29 @@ from .reporting_currency import REPORTING_CURRENCIES, reporting_currency_options
 from .utils import cell_text, clean_text
 
 
-SECTION_ORDER = [
-    "当前持仓",
-    "未平仓期权",
-    "总收益曲线",
-    "收益报告",
-    "总体概览",
-    "盈亏日历 / 阶段账单",
-    "清仓分析",
-    "期权收益分析",
-    "分年度个股汇总",
-    "交易时间线",
-    "工作表入口",
+PAGE_GROUPS = [
+    {
+        "key": "positions",
+        "label": "持仓",
+        "titles": ["当前持仓", "资金口径 / 数据质量", "未平仓期权"],
+    },
+    {
+        "key": "returns",
+        "label": "收益",
+        "titles": ["总收益曲线", "总体概览", "收益报告"],
+    },
+    {
+        "key": "review",
+        "label": "复盘",
+        "titles": ["盈亏日历 / 阶段账单", "清仓分析", "期权收益分析"],
+    },
+    {
+        "key": "details",
+        "label": "明细",
+        "titles": ["分年度个股汇总", "交易时间线", "工作表入口"],
+    },
 ]
+SECTION_ORDER = [title for group in PAGE_GROUPS for title in group["titles"]]
 DEFAULT_OPEN_SECTIONS = {"当前持仓", "未平仓期权"}
 
 
@@ -88,6 +98,7 @@ DASHBOARD_PAGER_HTML = """
   <div class="dashboard-topbar-main">
     <span class="dashboard-topbar-label">看板</span>
     <nav class="dashboard-page-tabs" data-dashboard-page-tabs aria-label="看板分页"></nav>
+    <nav class="dashboard-section-tabs" data-dashboard-section-tabs aria-label="当前分页区块"></nav>
   </div>
   <div class="dashboard-top-actions">
     <button class="dashboard-top-refresh" type="button" data-refresh-start>刷新</button>
@@ -100,7 +111,7 @@ DASHBOARD_PAGER_HTML = """
 """
 
 
-DASHBOARD_PAGER_SCRIPT = """
+DASHBOARD_PAGER_SCRIPT_TEMPLATE = """
 <script>
 (function setupDashboardPager() {
   function ready(callback) {
@@ -113,6 +124,7 @@ DASHBOARD_PAGER_SCRIPT = """
 
   ready(function() {
     var tabs = document.querySelector("[data-dashboard-page-tabs]");
+    var sectionTabs = document.querySelector("[data-dashboard-section-tabs]");
     if (!tabs || tabs.dataset.ready === "1") return;
     tabs.dataset.ready = "1";
     var sections = Array.prototype.slice.call(document.querySelectorAll("details.dashboard-section.section-collapsible"));
@@ -127,12 +139,7 @@ DASHBOARD_PAGER_SCRIPT = """
       return title.replace(/\\s+/g, "-").replace(/[^\\w\\u4e00-\\u9fff-]+/g, "-");
     }
 
-    var pageGroups = [
-      { key: "positions", label: "持仓", titles: ["当前持仓", "未平仓期权"] },
-      { key: "returns", label: "收益", titles: ["总收益曲线", "收益报告", "总体概览"] },
-      { key: "review", label: "复盘", titles: ["盈亏日历 / 阶段账单", "清仓分析", "期权收益分析"] },
-      { key: "details", label: "明细", titles: ["分年度个股汇总", "交易时间线", "工作表入口"] }
-    ];
+    var pageGroups = __PAGE_GROUPS_JSON__;
     var titleToSection = new Map();
     sections.forEach(function(section) {
       titleToSection.set(titleFor(section), section);
@@ -159,10 +166,54 @@ DASHBOARD_PAGER_SCRIPT = """
       activeGroups.push({ key: "other", label: "其他", titles: ungroupedTitles });
     }
 
+    function markSectionTab(activeTitle) {
+      if (!sectionTabs) return;
+      sectionTabs.querySelectorAll("[data-dashboard-section-title]").forEach(function(button) {
+        var active = button.dataset.dashboardSectionTitle === activeTitle;
+        button.classList.toggle("is-active", active);
+        button.setAttribute("aria-current", active ? "true" : "false");
+      });
+    }
+
+    function renderSectionTabs(titles) {
+      if (!sectionTabs) return;
+      sectionTabs.textContent = "";
+      sectionTabs.hidden = titles.length <= 1;
+      titles.forEach(function(title, index) {
+        var section = titleToSection.get(title);
+        if (!section) return;
+        var button = document.createElement("button");
+        button.type = "button";
+        button.className = "dashboard-section-tab";
+        button.dataset.dashboardSectionTitle = title;
+        button.textContent = title;
+        button.title = title;
+        button.setAttribute("aria-current", index === 0 ? "true" : "false");
+        if (index === 0) button.classList.add("is-active");
+        button.addEventListener("click", function() {
+          if (!section.open) section.open = true;
+          markSectionTab(title);
+          section.scrollIntoView({ block: "start", behavior: "smooth" });
+        });
+        sectionTabs.appendChild(button);
+      });
+    }
+
     function setActive(targetKey) {
       var showAll = targetKey === "all";
       var activeGroup = activeGroups.find(function(group) { return group.key === targetKey; });
       var activeTitles = new Set(activeGroup ? activeGroup.titles : []);
+      var sectionTabTitles = showAll
+        ? sections.map(titleFor).filter(Boolean)
+        : activeGroup ? activeGroup.titles : [];
+      var supportCount = showAll || !activeGroup ? 0 : Math.max(0, activeGroup.titles.length - 1);
+      document.documentElement.dataset.dashboardPage = targetKey;
+      document.documentElement.dataset.dashboardSupportCount = String(supportCount);
+      if (activeGroup) {
+        document.documentElement.dataset.dashboardPageLabel = activeGroup.label;
+      } else {
+        delete document.documentElement.dataset.dashboardPageLabel;
+      }
       tabs.querySelectorAll("[data-dashboard-page]").forEach(function(button) {
         var active = button.dataset.dashboardPage === targetKey;
         button.classList.toggle("is-active", active);
@@ -171,11 +222,13 @@ DASHBOARD_PAGER_SCRIPT = """
       sections.forEach(function(section) {
         var title = titleFor(section);
         var active = showAll || activeTitles.has(title);
+        var role = section.dataset.dashboardPageRole || "";
         section.hidden = !active;
-        section.classList.toggle("dashboard-section-primary", active && section.dataset.dashboardPageRole === "primary");
-        section.classList.toggle("dashboard-section-supporting", active && section.dataset.dashboardPageRole === "supporting");
+        section.classList.toggle("dashboard-section-primary", active && !showAll && role === "primary");
+        section.classList.toggle("dashboard-section-supporting", active && !showAll && role === "supporting");
         if (active && !section.open) section.open = true;
       });
+      renderSectionTabs(sectionTabTitles);
       try {
         window.localStorage.setItem("trade-tracker-active-page-v1", targetKey);
       } catch (error) {}
@@ -234,12 +287,27 @@ def safe_json(data: object) -> str:
     )
 
 
+def page_groups_payload() -> list[dict[str, object]]:
+    return [
+        {
+            "key": str(group["key"]),
+            "label": str(group["label"]),
+            "titles": [str(title) for title in group["titles"]],
+        }
+        for group in PAGE_GROUPS
+    ]
+
+
 def render_dashboard_pager_html() -> str:
     buttons = "\n    ".join(
         f'<button type="button" data-reporting-currency-button data-reporting-currency="{html.escape(currency)}">{html.escape(currency)}</button>'
         for currency in REPORTING_CURRENCIES
     )
     return DASHBOARD_PAGER_HTML.format(buttons=buttons)
+
+
+def render_dashboard_pager_script() -> str:
+    return DASHBOARD_PAGER_SCRIPT_TEMPLATE.replace("__PAGE_GROUPS_JSON__", safe_json(page_groups_payload()))
 
 
 def render_dashboard_currency_script() -> str:
@@ -367,7 +435,7 @@ def insert_dashboard_page_tabs(html_text: str) -> str:
     first_section = DETAILS_PATTERN.search(html_text)
     if not first_section:
         return html_text
-    tabs = render_dashboard_pager_html() + DASHBOARD_PAGER_SCRIPT + render_dashboard_currency_script()
+    tabs = render_dashboard_pager_html() + render_dashboard_pager_script() + render_dashboard_currency_script()
     anchors = [
         html_text.find('id="refresh-panel"'),
         first_section.start(),

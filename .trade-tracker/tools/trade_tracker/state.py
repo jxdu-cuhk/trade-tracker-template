@@ -7,3 +7,6 @@ ANNUAL_HOLDING_DAYS_MAP: dict[tuple[str, str, str], int] = {}
 OPEN_OPTION_MARKS: dict[tuple[str, str, str, str, str, str, str, str], dict[str, str]] = {}
 PERFORMANCE_STOCK_PAYLOAD: dict[str, object] = {}
 DISPLAY_PAYLOAD: dict[str, object] = {}
+TRANSACTION_TAGS_BY_ROW: dict[int, list[str]] = {}
+TRANSACTION_TAGS_PAYLOAD: dict[str, object] = {}
+TRANSACTION_TAG_COLUMN: int | None = None

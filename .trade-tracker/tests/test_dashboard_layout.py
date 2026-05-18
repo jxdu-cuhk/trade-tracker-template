@@ -10,6 +10,8 @@ TOOLS_DIR = Path(__file__).resolve().parents[1] / "tools"
 sys.path.insert(0, str(TOOLS_DIR))
 
 from trade_tracker.dashboard_layout import (
+    PAGE_GROUPS,
+    SECTION_ORDER,
     apply_tonghuashun_curve_style,
     collapse_secondary_sections,
     insert_dashboard_page_tabs,
@@ -28,6 +30,12 @@ def section(title: str, body: str = "") -> str:
 
 
 class DashboardLayoutTests(unittest.TestCase):
+    def test_page_groups_drive_section_order_without_duplicates(self):
+        grouped_titles = [title for group in PAGE_GROUPS for title in group["titles"]]
+
+        self.assertEqual(grouped_titles, SECTION_ORDER)
+        self.assertEqual(len(grouped_titles), len(set(grouped_titles)))
+
     def test_reorder_dashboard_sections_uses_requested_heading_order(self):
         html = (
             "<main>"
@@ -35,6 +43,7 @@ class DashboardLayoutTests(unittest.TestCase):
             + section("总收益曲线")
             + section("当前持仓")
             + section("未平仓期权")
+            + section("资金口径 / 数据质量")
             + section("分年度个股汇总")
             + section("盈亏日历 / 阶段账单")
             + section("清仓分析")
@@ -48,10 +57,11 @@ class DashboardLayoutTests(unittest.TestCase):
         updated = reorder_dashboard_sections(html)
         titles = [
             "当前持仓",
+            "资金口径 / 数据质量",
             "未平仓期权",
             "总收益曲线",
-            "收益报告",
             "总体概览",
+            "收益报告",
             "盈亏日历 / 阶段账单",
             "清仓分析",
             "期权收益分析",
@@ -78,14 +88,22 @@ class DashboardLayoutTests(unittest.TestCase):
             updated_again = insert_dashboard_page_tabs(updated)
 
         self.assertIn("data-dashboard-page-tabs", updated)
+        self.assertIn("data-dashboard-section-tabs", updated)
         self.assertIn("dashboard-top-refresh", updated)
         self.assertIn("pageGroups", updated)
-        self.assertIn('key: "positions"', updated)
-        self.assertIn('key: "returns"', updated)
-        self.assertIn('key: "review"', updated)
-        self.assertIn('key: "details"', updated)
+        self.assertIn('"key":"positions"', updated)
+        self.assertIn('"key":"returns"', updated)
+        self.assertIn('"key":"review"', updated)
+        self.assertIn('"key":"details"', updated)
+        self.assertIn('"titles":["当前持仓","资金口径 / 数据质量","未平仓期权"]', updated)
+        self.assertIn('"titles":["总收益曲线","总体概览","收益报告"]', updated)
         self.assertIn("dashboard-section-primary", updated)
         self.assertIn("dashboard-section-supporting", updated)
+        self.assertIn("dashboard-section-tab", updated)
+        self.assertIn("dashboardSectionTitle", updated)
+        self.assertIn("renderSectionTabs", updated)
+        self.assertIn("scrollIntoView", updated)
+        self.assertIn("dashboardSupportCount", updated)
         self.assertIn("data-dashboard-currency-switcher", updated)
         self.assertIn('data-reporting-currency="港币"', updated)
         self.assertIn("trade-tracker-reporting-currency-v1", updated)

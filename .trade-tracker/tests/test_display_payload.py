@@ -10,6 +10,7 @@ from unittest.mock import patch
 TOOLS_DIR = Path(__file__).resolve().parents[1] / "tools"
 sys.path.insert(0, str(TOOLS_DIR))
 
+from trade_tracker import state
 from trade_tracker.display_payload import build_display_payload
 
 
@@ -52,6 +53,32 @@ def short_put_row():
     }
 
 
+def inferred_short_put_row():
+    row = short_put_row()
+    row[9] = Cell(2)
+    row[11] = Cell(1)
+    row[12] = Cell(None)
+    return row
+
+
+def short_call_without_capital_row():
+    return {
+        1: Cell("卖出"),
+        2: Cell(date(2026, 5, 1)),
+        3: Cell(date(2026, 5, 31)),
+        4: Cell(None),
+        5: Cell("600000"),
+        6: Cell("认购"),
+        7: Cell(50),
+        8: Cell(1),
+        9: Cell(2),
+        11: Cell(1),
+        12: Cell(None),
+        19: Cell(100),
+        20: Cell("人民币"),
+    }
+
+
 def realized_row():
     return {
         1: Cell("股票"),
@@ -66,6 +93,12 @@ def realized_row():
 
 
 class DisplayPayloadTests(unittest.TestCase):
+    def setUp(self):
+        state.OPEN_OPTION_MARKS = {}
+        state.TRANSACTION_TAGS_BY_ROW = {}
+        state.TRANSACTION_TAGS_PAYLOAD = {}
+        state.TRANSACTION_TAG_COLUMN = None
+
     def test_holdings_totals_are_account_level_cny_values(self):
         data = {
             "holdings": [
@@ -138,6 +171,22 @@ class DisplayPayloadTests(unittest.TestCase):
         self.assertEqual(payload["realized"]["trades"][0]["pnl"], 120)
         self.assertEqual(payload["realized"]["daily"]["byDate"]["2026-05-08"]["pnlCny"], 120)
         self.assertEqual(payload["realizedDaily"]["byDate"]["2026-05-08"]["byCurrency"]["人民币"]["native"], 120)
+
+    def test_capital_quality_tracks_inferred_put_and_missing_call_capital(self):
+        with patch("trade_tracker.display_payload.current_fx_rates_to_cny", return_value={"人民币": 1.0}):
+            payload = build_display_payload(
+                FakeCore(),
+                [(2, inferred_short_put_row()), (3, short_call_without_capital_row())],
+                {"holdings": []},
+            )
+
+        option_totals = payload["capital"]["optionCapital"]["totals"]
+        self.assertEqual(option_totals["openCount"], 2)
+        self.assertEqual(option_totals["inferredCount"], 1)
+        self.assertAlmostEqual(option_totals["inferredCashSecuredPutCny"], 4801.0)
+        self.assertEqual(option_totals["missingCapitalCount"], 1)
+        self.assertEqual(payload["dataQuality"]["status"], "danger")
+        self.assertEqual(payload["dataQuality"]["counts"]["missingOptionCapital"], 1)
 
 
 if __name__ == "__main__":

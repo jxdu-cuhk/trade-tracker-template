@@ -45,6 +45,7 @@
 | `乘数` | 期权合约乘数 | 期权收益和资金 |
 | `币种` | 人民币/港币/美元 | 分币种和折算 |
 | `年份` | 年度切片 | 年度汇总 |
+| `标签` | 可选交易标签，支持 `，`、`;`、`|`、空格、换行分隔多个标签 | 交易时间线、盈亏日历、阶段账单 |
 
 `分红记录` 当前进入 `dividends.py`，会作为已实现现金事件参与成本回冲和收益曲线。
 
@@ -61,6 +62,7 @@
 | `OPEN_OPTION_MARKS` | 未平仓期权现价、浮盈、占用本金 | `options.py` | 期权表、卖出认沽仓位 |
 | `PERFORMANCE_STOCK_PAYLOAD` | 月度/年度个股表现切片 | `historical_curve.py` | 收益报告 |
 | `DISPLAY_PAYLOAD` | 持仓、币种折算、当日浮盈、已实现交易与日汇总的统一展示层 | `display_payload.py` / `patcher.py` | 当前持仓顶部卡、盈亏日历 |
+| `TRANSACTION_TAGS_BY_ROW` / `TRANSACTION_TAGS_PAYLOAD` | 交易行号到标签的映射和标签计数 | `transaction_tags.py` / `patcher.py` | 交易时间线、已实现 payload、标签筛选 |
 
 ## Dashboard Data 接口
 
@@ -116,11 +118,15 @@
 | `realized.trades` | 已实现交易明细的标准化列表，等价于旧 `data-realized-payload` 的来源 |
 | `realized.daily` / `realizedDaily` | 已实现盈亏按平仓日和币种汇总；`realizedDaily` 是兼容别名 |
 | `realized.months` / `realized.currencies` | 已实现交易涉及的月份和币种，供控件生成 |
+| `tags` | 交易标签计数和已打标签行数 |
+| `capital` | 账户资产、风险敞口、持仓成本、已实现闭仓本金和期权资金来源 |
+| `dataQuality` | 持仓现价、未平仓期权行情、期权资金口径和缓存状态的健康检查 |
 
 已接入：
 
 - 当前持仓顶部卡优先读 `state.DISPLAY_PAYLOAD["holdingsTotals"]`，读不到时才回退解析 HTML 表格。
-- 盈亏日历的已实现日汇总、最新展示交易日浮盈优先读 `data-display-payload`，旧明细重算、旧表格和顶部卡只作为兜底。
+- 资金口径 / 数据质量区块读 `state.DISPLAY_PAYLOAD["capital"]` 和 `["dataQuality"]`，只负责展示资金分母、期权兜底和行情完整度。
+- 盈亏日历的已实现日汇总、最新展示交易日浮盈优先读 `data-display-payload`，旧明细重算、旧表格和顶部卡只作为兜底；交易标签来自 `realized.trades[].tags`。
 
 ## 页面分页分组
 
@@ -128,11 +134,13 @@
 
 | 分页 | 包含区块 | 主视图 |
 | --- | --- | --- |
-| `持仓` | 当前持仓、未平仓期权 | 当前持仓 |
-| `收益` | 总收益曲线、收益报告、总体概览 | 总收益曲线 |
+| `持仓` | 当前持仓、资金口径 / 数据质量、未平仓期权 | 当前持仓 |
+| `收益` | 总收益曲线、总体概览、收益报告 | 总收益曲线 |
 | `复盘` | 盈亏日历 / 阶段账单、清仓分析、期权收益分析 | 盈亏日历 / 阶段账单 |
 | `明细` | 分年度个股汇总、交易时间线、工作表入口 | 分年度个股汇总 |
 | `全部` | 所有区块 | 按业务顺序展开 |
+
+分页配置在 `dashboard_layout.py` 的 `PAGE_GROUPS` 中维护，`SECTION_ORDER` 由这份配置生成；前端按钮、页面显示、页内快捷跳转和排序都读同一份定义。非 `全部` 分页里，第一个区块会标记为主工作区，后续区块标记为辅助区块并降低视觉权重。顶部会根据当前分页生成区块快捷按钮，长页面可直接跳到下游分析区块。
 
 ## 页面区块接口
 
@@ -140,14 +148,16 @@
 | --- | --- | --- | --- | --- |
 | 当前持仓表 | `html_tables.py` | `data["holdings"]` | 代码、名称、市值、浮盈、收益率、仓位、天数、回本空间 | 成本已被已实现收益和分红回冲，和原始买入成本不同 |
 | 当前持仓顶部卡 | `holdings_overview.py` | `state.DISPLAY_PAYLOAD`、交易行、历史行情；HTML 表格兜底 | 持仓总资产、总盈亏、总市值、现持仓浮盈、已实现 | 现持仓历史区间仍会临时拉个股历史行情 |
+| 资金口径 / 数据质量 | `capital_quality.py` | `state.DISPLAY_PAYLOAD["capital"]`、`["dataQuality"]` | 账户资产口径、风险敞口、成本/占用、持仓浮盈、期权资金来源、行情健康 | 只展示已统一的资金口径，不替代后续曲线收益率 payload |
 | 未平仓期权 | `options.py`、`html_tables.py` | 未平仓期权行、公开期权行情 | 现价、浮动盈亏、占用本金 | short put 会推导 cash-secured capital；short call 不自动虚构本金 |
 | 总体概览 | `overview.py` | 原始 metric cards、交易行、汇率 | 总盈亏、收益率、年化、交易费用、分币种概览 | 人民币汇总来自各币种卡片反推和折算，收益率分母可能不直观 |
-| 盈亏日历 / 阶段账单 | `realized_analysis.py` | `data-display-payload`、`data-realized-payload`、`data-return-curve-json` | 已实现、浮盈、合计三种日历口径 | 已实现日汇总和最新交易日浮盈读统一 payload；历史浮盈来自曲线点差 |
+| 盈亏日历 / 阶段账单 | `realized_analysis.py` | `data-display-payload`、`data-realized-payload`、`data-return-curve-json` | 已实现、浮盈、合计三种日历口径，已实现明细标签筛选 | 已实现日汇总和最新交易日浮盈读统一 payload；历史浮盈来自曲线点差 |
 | 清仓分析 | `clearance_analysis.py` | 股票交易行 | 清仓周期、盈亏、本金、收益率、年化 | 只看现股清仓周期，不包含期权归因 |
 | 期权收益分析 | `option_analysis.py` | `data-option-payload` | 期权总览、标的拆分、明细 | 只统计已平仓/到期的期权，未平仓只在未平仓期权表显示 |
 | 总收益曲线 | `historical_curve.py`、`return_curve.py` | `data["curve_series"]`、指数缓存、汇率 | 汇总/A股/港股/美股曲线、baseline、超额、K线 | 曲线金额、收益率、资金流、资金分母目前分散在多个字段 |
 | 收益报告 | `performance_report.py` | `data-return-curve-json`、`data-realized-payload`、`data-performance-stock-payload` | 最大增长/回撤、盈亏对比、日历、个股盈亏 | 报告前端再次从曲线推导日收益和收益率 |
 | 分年度个股汇总 | `html_tables.py`、`historical_curve.py` | `annual_summary`、`PERFORMANCE_STOCK_PAYLOAD` | 年度内盈亏、收益率、年化、持有天数 | 已经按年切片，但需要继续确认跨年持仓分母 |
+| 交易时间线 | `transaction_tags.py`、核心生成器 | `TRANSACTION_TAGS_BY_ROW`、核心 HTML 表格 | 逐笔交易、标签列、标签筛选 | 标签按 `交易记录` 行号对齐；不要在没有 `标签` 表头时把其他空白扩展列当标签 |
 
 ## 曲线 JSON 接口
 
@@ -195,7 +205,7 @@
    - 建议明确拆成：原始投入成本、当前占用资金、策略资金、现金流本金、展示折算资金。
 
 2. 统一展示 payload 需要继续扩面。
-   - 当前已覆盖持仓总计、分币种持仓、最新日浮盈、已实现交易列表和已实现日汇总。
+   - 当前已覆盖持仓总计、分币种持仓、最新日浮盈、已实现交易列表、已实现日汇总、交易标签、资金口径和数据质量。
    - 后续收益曲线、总体概览、收益报告也应逐步读 `display_payload`，减少 DOM 反读和前端重复推导。
 
 3. 曲线收益率分母应和曲线金额明确绑定。
@@ -207,12 +217,16 @@
    - 建议建立一份 `daily_pnl_payload`，所有日历、报告、顶部卡都读它。
 
 5. 期权资金口径要显式展示。
-   - short put 使用 cash-secured capital 是合理的，但 UI 应该能看出是推导资金，不是真实入金。
+   - 持仓页已经新增资金口径 / 数据质量区块，short put 的 cash-secured capital 会标成兜底资金，不是真实入金。
    - short call / spread / 组合策略需要继续补 “保证金/策略资金/最大亏损” 的来源字段。
 
 6. 分币种和统一展示币种要区分。
    - 当前很多字段先按原币种计算，再按实时汇率折算展示。
    - 建议所有折算展示字段都带原币种金额、汇率、折算币种，避免用户误以为源数据已经换币。
+
+7. 交易标签只描述交易事实，不参与收益口径。
+   - 标签列可以用于复盘筛选，例如 `建仓`、`T操作`、`AI`、`事件驱动`。
+   - 后续如果要做标签维度盈亏统计，应基于 `display_payload["realized"]["trades"][].tags` 聚合，避免重新解析 HTML。
 
 ## 下一步优化建议
 
@@ -227,6 +241,9 @@ display_payload
   realized.trades
   realized.daily
   realizedDaily
+  tags
+  capital
+  dataQuality
   curve_points
   stock_periods
   option_positions

@@ -28,9 +28,11 @@
 主要模块：
 
 - `.trade-tracker/tools/trade_tracker/app.py`: 导出流程编排，负责加载核心模块、生成网页、整理输出。
-- `.trade-tracker/tools/trade_tracker/patcher.py`: 把持仓、汇总、行情、刷新面板等扩展挂到核心生成器上。
-- `.trade-tracker/tools/trade_tracker/display_payload.py`: 统一展示数据层，先汇总持仓、分币种折算、最新日浮盈、已实现交易列表和已实现日汇总，再给页面区块复用。
-- `.trade-tracker/tools/trade_tracker/dashboard_layout.py`: 顶部业务分组分页、刷新/统一币种操作区、栏目布局和总收益曲线控制区。
+- `.trade-tracker/tools/trade_tracker/patcher.py`: 把持仓、资金口径、交易标签、汇总、行情、刷新面板等扩展挂到核心生成器上。
+- `.trade-tracker/tools/trade_tracker/display_payload.py`: 统一展示数据层，先汇总持仓、分币种折算、最新日浮盈、已实现交易列表、已实现日汇总、交易标签、资金口径和数据质量，再给页面区块复用。
+- `.trade-tracker/tools/trade_tracker/transaction_tags.py`: 交易标签读取和展示层，识别 `交易记录` 的 `标签` 列，把标签接到交易时间线、盈亏日历和阶段账单。
+- `.trade-tracker/tools/trade_tracker/capital_quality.py`: 持仓页的资金口径 / 数据质量区块，把账户资产、风险敞口、期权资金兜底、行情完整度集中展示。
+- `.trade-tracker/tools/trade_tracker/dashboard_layout.py`: 顶部业务分组分页、当前页区块快捷跳转、刷新/统一币种操作区、栏目排序、主/辅区块层级和总收益曲线控制区；分页配置统一驱动排序和前端按钮，避免重复维护。
 - `.trade-tracker/tools/trade_tracker/return_curve.py`: 总收益曲线、baseline、超额收益、K 线、缩放拖动、tooltip，以及指数长期缓存和增量补尾。
 - `.trade-tracker/tools/trade_tracker/historical_curve.py`: 个股真实历史行情、缓存、未实现盈亏历史曲线，以及按月/按年切片的个股收益 payload。
 - `.trade-tracker/tools/trade_tracker/holdings_overview.py`: 当前持仓顶部汇总卡、当日/本月/近三月/本年已实现盈亏。
@@ -40,7 +42,7 @@
 - `.trade-tracker/tools/trade_tracker/overview.py`: 总体概览、分币种概览和交易费用汇总。
 - `.trade-tracker/tools/trade_tracker/options.py`: 期权和已完成现股收益口径，比如 covered call、short put、缺失保证金兜底和成本回冲。
 - `.trade-tracker/tools/trade_tracker/option_analysis.py`: 期权收益分析页面。
-- `.trade-tracker/tools/trade_tracker/realized_analysis.py`: 盈亏日历 / 阶段账单，日历可切换已实现、持仓浮动和合计口径；最新交易日浮盈对齐当前持仓汇总，历史日期沿用收益曲线。
+- `.trade-tracker/tools/trade_tracker/realized_analysis.py`: 盈亏日历 / 阶段账单，日历可切换已实现、持仓浮动和合计口径，已实现明细可按交易标签筛选；最新交易日浮盈对齐当前持仓汇总，历史日期沿用收益曲线。
 - `.trade-tracker/tools/trade_tracker/clearance_analysis.py`: 清仓分析。
 - `.trade-tracker/tools/trade_tracker/performance_report.py`: 收益报告。
 - `.trade-tracker/tools/trade_tracker/market_data.py`: 东方财富、腾讯、Yahoo、HKEX 行情和汇率获取。
@@ -52,7 +54,7 @@
 说明：
 
 - `.trade-tracker/preview/` 里的内容会被刷新脚本重新生成，通常不用手动改。
-- 数值口径和页面接口先看 `.trade-tracker/DATA_INTERFACES.md`，优先扩展 `display_payload.py`，再改具体模块，避免同一个指标在多个区块里各算一遍。
+- 数值口径和页面接口先看 `.trade-tracker/DATA_INTERFACES.md`，优先扩展 `display_payload.py`，再改具体模块，避免同一个指标在多个区块里各算一遍；持仓页的资金口径 / 数据质量区块也读这层，不单独推导。
 - `.trade-tracker/tools/cache/` 可以删除，刷新时会按需重建；保留它能明显减少行情请求。指数缓存现在按指数长期保存，日常刷新只加载一次缓存、只补缺口和当天实时尾点、最后一次性落盘；科创综指从 `2022-04-11` 起，用中证指数官方接口补腾讯缺失的早期历史。美股现股报价会优先取 Yahoo 盘前/盘后价格，拿不到时再回退到常规价或腾讯行情。
 - `.trade-tracker/history/` 里的原始文件建议保留，后续补数据时还能继续用。
 - 如果看板没有更新，先直接刷新网页；如果后台服务没有响应，再双击 `Update Preview.command`。

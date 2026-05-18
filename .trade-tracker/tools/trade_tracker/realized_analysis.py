@@ -9,6 +9,7 @@ from . import state
 from .market_data import display_currency_label
 from .options import option_strategy_capital
 from .settings import OPTION_EVENTS
+from .transaction_tags import transaction_tags_for_row
 from .utils import (
     cell_raw,
     clean_name,
@@ -39,6 +40,7 @@ class RealizedTrade:
     pnl: float
     capital: float | None
     days: float | None
+    tags: tuple[str, ...] = ()
 
     @property
     def date_iso(self) -> str:
@@ -141,6 +143,7 @@ def realized_trade_from_row(core, row_number: int, cells: dict[int, object]) -> 
         pnl=float(pnl),
         capital=capital,
         days=days,
+        tags=tuple(transaction_tags_for_row(row_number, cells)),
     )
 
 
@@ -195,6 +198,7 @@ def trade_payload(trade: RealizedTrade) -> dict[str, object]:
         "capital": trade.capital if trade.capital is not None else 0.0,
         "days": trade.holding_days if trade.holding_days is not None else 0.0,
         "returnRate": trade.return_rate,
+        "tags": list(trade.tags),
     }
 
 
@@ -245,6 +249,8 @@ def render_realized_toolbar() -> str:
               <select class="filter-select js-realized-month" aria-label="选择盈亏日历月份"></select>
               <span class="filter-label">币种</span>
               <select class="filter-select js-realized-currency" aria-label="选择盈亏日历币种"></select>
+              <span class="filter-label">标签</span>
+              <select class="filter-select js-realized-tag" aria-label="选择交易标签"></select>
               <span class="filter-label">显示</span>
               <div class="realized-mode-tabs" data-realized-calendar-mode aria-label="选择日历显示口径">
                 <button type="button" class="realized-mode-tab is-active" data-calendar-mode="realized">已实现</button>
@@ -266,6 +272,7 @@ def render_calendar_panel() -> str:
         ("money", "number", "投入本金"),
         ("percent", "number", "收益率"),
         ("num", "number", "持有天数"),
+        ("text", "text", "标签"),
         ("ccy", "text", "币种"),
     ]
     return (
@@ -310,6 +317,7 @@ def render_stage_panel() -> str:
         ("money", "number", "已实现盈亏"),
         ("percent", "number", "收益率"),
         ("num", "number", "持有天数"),
+        ("text", "text", "标签"),
         ("ccy", "text", "币种"),
     ]
     return (
@@ -387,6 +395,7 @@ def render_realized_filter_script() -> str:
 
           const monthSelect = section.querySelector('.js-realized-month');
           const currencySelect = section.querySelector('.js-realized-currency');
+          const tagSelect = section.querySelector('.js-realized-tag');
           const calendarModeControl = section.querySelector('[data-realized-calendar-mode]');
           const calendar = section.querySelector('[data-pnl-calendar]');
           const dayTitle = section.querySelector('[data-realized-day-title]');
@@ -398,7 +407,7 @@ def render_realized_filter_script() -> str:
           const stageSummaryBody = section.querySelector('[data-stage-summary-body]');
           const stageCategoryBody = section.querySelector('[data-stage-category-body]');
           const stageDetailBody = section.querySelector('[data-stage-detail-body]');
-          if (!monthSelect || !currencySelect || !calendar || !dayBody || !stageStart || !stageEnd) return;
+          if (!monthSelect || !currencySelect || !tagSelect || !calendar || !dayBody || !stageStart || !stageEnd) return;
 
           let selectedDate = '';
           let calendarMode = 'realized';
@@ -423,6 +432,16 @@ def render_realized_filter_script() -> str:
               .sort((a, b) => a.localeCompare(b, 'zh-CN'));
           }
 
+          function tradeTags(trade) {
+            return Array.isArray(trade.tags)
+              ? trade.tags.map((tag) => String(tag || '').trim()).filter(Boolean)
+              : [];
+          }
+
+          function sortedTags() {
+            return unique(trades.flatMap(tradeTags)).sort((a, b) => a.localeCompare(b, 'zh-CN'));
+          }
+
           function isoDate(year, month, day) {
             return `${year}-${String(month).padStart(2, '0')}-${String(day).padStart(2, '0')}`;
           }
@@ -437,6 +456,18 @@ def render_realized_filter_script() -> str:
 
           function matchesCurrency(trade) {
             return matchesCurrencyLabel(tradeCurrency(trade));
+          }
+
+          function matchesTag(trade) {
+            const selected = tagSelect.value || 'all';
+            if (selected === 'all') return true;
+            const tags = tradeTags(trade);
+            if (selected === '__none__') return tags.length === 0;
+            return tags.includes(selected);
+          }
+
+          function matchesTradeFilters(trade) {
+            return matchesCurrency(trade) && matchesTag(trade);
           }
 
           function number(value) {
@@ -572,7 +603,7 @@ def render_realized_filter_script() -> str:
 
           function realizedConvertedForDay(iso) {
             const daily = realizedDailyForDay(iso);
-            if (daily) {
+            if ((tagSelect.value || 'all') === 'all' && daily) {
               if (currencySelect.value === 'all') {
                 const payloadValue = optionalNumber(daily.pnlCny);
                 if (Number.isFinite(payloadValue)) return payloadValue;
@@ -727,6 +758,22 @@ def render_realized_filter_script() -> str:
               currencySelect.appendChild(option);
             });
 
+            tagSelect.innerHTML = '';
+            const allTagOption = document.createElement('option');
+            allTagOption.value = 'all';
+            allTagOption.textContent = '全部标签';
+            tagSelect.appendChild(allTagOption);
+            const noTagOption = document.createElement('option');
+            noTagOption.value = '__none__';
+            noTagOption.textContent = '未打标签';
+            tagSelect.appendChild(noTagOption);
+            sortedTags().forEach((tag) => {
+              const option = document.createElement('option');
+              option.value = tag;
+              option.textContent = tag;
+              tagSelect.appendChild(option);
+            });
+
             if (months.length) monthSelect.value = months[0];
             const dates = trades.map((trade) => trade.date).sort();
             if (dates.length) {
@@ -744,22 +791,24 @@ def render_realized_filter_script() -> str:
             if (!loadCurveSeries()) return;
             const previousMonth = monthSelect.value;
             const previousCurrency = currencySelect.value;
+            const previousTag = tagSelect.value;
             populateControls();
             if (previousMonth && selectHasValue(monthSelect, previousMonth)) monthSelect.value = previousMonth;
             if (previousCurrency && selectHasValue(currencySelect, previousCurrency)) currencySelect.value = previousCurrency;
+            if (previousTag && selectHasValue(tagSelect, previousTag)) tagSelect.value = previousTag;
             selectedDate = '';
             renderAll();
           }
 
           function tradesForDay(iso) {
             return trades
-              .filter((trade) => trade.date === iso && matchesCurrency(trade))
+              .filter((trade) => trade.date === iso && matchesTradeFilters(trade))
               .sort((a, b) => number(b.pnl) - number(a.pnl));
           }
 
           function statsForDay(iso) {
             const daily = realizedDailyForDay(iso);
-            if (daily && daily.byCurrency) {
+            if ((tagSelect.value || 'all') === 'all' && daily && daily.byCurrency) {
               return Object.values(daily.byCurrency)
                 .filter((item) => item && matchesCurrencyLabel(item.currency))
                 .map((item) => ({
@@ -789,7 +838,7 @@ def render_realized_filter_script() -> str:
           function pickSelectedDate(month) {
             if (selectedDate && selectedDate.slice(0, 7) === month && hasSelectedMetricActivity(selectedDate)) return;
             const candidates = unique(trades
-              .filter((trade) => String(trade.date).slice(0, 7) === month && matchesCurrency(trade))
+              .filter((trade) => String(trade.date).slice(0, 7) === month && matchesTradeFilters(trade))
               .map((trade) => trade.date));
             Array.from(curveChangeMap().entries()).forEach(([iso, change]) => {
               if (iso.slice(0, 7) === month && hasCurveActivity(change)) candidates.push(iso);
@@ -888,7 +937,7 @@ def render_realized_filter_script() -> str:
           function renderTradeRows(body, items, emptyText, includeOpenDate) {
             body.innerHTML = '';
             if (!items.length) {
-              emptyRow(body, includeOpenDate ? 10 : 10, emptyText);
+              emptyRow(body, includeOpenDate ? 11 : 11, emptyText);
               return;
             }
             items.forEach((trade) => {
@@ -909,9 +958,26 @@ def render_realized_filter_script() -> str:
               if (!includeOpenDate) tr.appendChild(cell('money', formatNumber(capital), capital));
               tr.appendChild(cell('percent', formatPercent(returnRate), returnRate, true));
               tr.appendChild(cell('num', days ? formatNumber(days, 1) : '-', days || NaN));
+              tr.appendChild(tagCell(tradeTags(trade)));
               tr.appendChild(cell('ccy', tradeCurrency(trade)));
               body.appendChild(tr);
             });
+          }
+
+          function tagCell(tags) {
+            const td = document.createElement('td');
+            td.className = 'text transaction-tag-cell';
+            if (!tags.length) {
+              td.textContent = '-';
+              return td;
+            }
+            tags.forEach((tag) => {
+              const chip = document.createElement('span');
+              chip.className = 'transaction-tag-chip';
+              chip.textContent = tag;
+              td.appendChild(chip);
+            });
+            return td;
           }
 
           function renderDayDetail() {
@@ -947,6 +1013,7 @@ def render_realized_filter_script() -> str:
             const end = rawStart && rawEnd && rawStart > rawEnd ? rawStart : rawEnd;
             return trades
               .filter((trade) => (!start || trade.date >= start) && (!end || trade.date <= end))
+              .filter(matchesTradeFilters)
               .sort((a, b) => String(b.date).localeCompare(String(a.date)) || number(b.pnl) - number(a.pnl));
           }
 
@@ -1075,6 +1142,10 @@ def render_realized_filter_script() -> str:
             renderAll();
           });
           currencySelect.addEventListener('change', () => {
+            selectedDate = '';
+            renderAll();
+          });
+          tagSelect.addEventListener('change', () => {
             selectedDate = '';
             renderAll();
           });
