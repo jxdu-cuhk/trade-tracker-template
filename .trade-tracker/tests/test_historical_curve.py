@@ -18,6 +18,7 @@ import trade_tracker.historical_curve as historical_curve_module  # noqa: E402
 from trade_tracker import state  # noqa: E402
 from trade_tracker.historical_curve import (  # noqa: E402
     SecurityHistoryPoint,
+    build_stock_lots,
     build_performance_stock_payload,
     fetch_security_history_points_online,
     parse_tencent_kline_rows,
@@ -176,6 +177,68 @@ class HistoricalCurveTests(unittest.TestCase):
         self.assertAlmostEqual(item["capital"], 1001.0)
         self.assertAlmostEqual(item["rate"], item["pnl"] / item["capital"] * 100)
 
+    def test_performance_stock_rate_matches_app_adjusted_cost_basis_for_open_holding(self):
+        snapshots = {
+            date(2026, 5, 18): {
+                ("688820", "人民币"): {
+                    "code": "688820",
+                    "name": "盛合晶微",
+                    "currency": "人民币",
+                    "value": 99248.35,
+                    "realized_value": 86759.24,
+                    "float_value": 12489.11,
+                    "capital": 539277.70,
+                    "market_value": 362394.60,
+                    "position_quantity": 1915.0,
+                }
+            },
+        }
+
+        with patch("trade_tracker.historical_curve.current_fx_rates_to_cny", return_value={"人民币": 1.0}):
+            payload = build_performance_stock_payload(snapshots)
+
+        item = payload["years"]["2026"][0]
+        self.assertAlmostEqual(item["pnl"], 99248.35)
+        self.assertAlmostEqual(item["rate"], 99248.35 / (362394.60 - 99248.35) * 100)
+
+    def test_performance_stock_payload_splits_dividend_net_from_trade_realized(self):
+        snapshots = {
+            date(2025, 12, 31): {
+                ("300394", "人民币"): {
+                    "code": "300394",
+                    "name": "天孚通信",
+                    "currency": "人民币",
+                    "value": 305.0,
+                    "realized_value": 305.0,
+                    "dividend_value": 305.0,
+                    "capital": 0.0,
+                }
+            },
+            date(2026, 1, 8): {
+                ("300394", "人民币"): {
+                    "code": "300394",
+                    "name": "天孚通信",
+                    "currency": "人民币",
+                    "value": 10305.0,
+                    "realized_value": 10305.0,
+                    "dividend_value": 305.0,
+                    "capital": 100000.0,
+                }
+            },
+        }
+
+        with patch("trade_tracker.historical_curve.current_fx_rates_to_cny", return_value={"人民币": 1.0}):
+            payload = build_performance_stock_payload(snapshots)
+
+        item = payload["years"]["2026"][0]
+        self.assertAlmostEqual(item["nativePnl"], 10000.0)
+        self.assertAlmostEqual(item["nativeRealizedPnl"], 10000.0)
+        self.assertAlmostEqual(item["nativeDividendPnl"], 0.0)
+        prior_item = payload["years"]["2025"][0]
+        self.assertAlmostEqual(prior_item["nativePnl"], 305.0)
+        self.assertAlmostEqual(prior_item["nativeRealizedPnl"], 0.0)
+        self.assertAlmostEqual(prior_item["nativeDividendPnl"], 305.0)
+
     def test_performance_stock_monthly_rate_uses_previous_month_end_market_value(self):
         snapshots = {
             date(2026, 2, 27): {
@@ -186,6 +249,7 @@ class HistoricalCurveTests(unittest.TestCase):
                     "value": 30328.87,
                     "capital": 4735.0,
                     "market_value": 35063.87,
+                    "net_flow": 0.0,
                 }
             },
             date(2026, 3, 16): {
@@ -196,6 +260,7 @@ class HistoricalCurveTests(unittest.TestCase):
                     "value": 26863.87,
                     "capital": 4735.0,
                     "market_value": 0.0,
+                    "net_flow": -31598.87,
                 }
             },
         }
@@ -499,6 +564,40 @@ class HistoricalCurveTests(unittest.TestCase):
         self.assertLess(points_by_iso["2025-04-08"]["capital"], 300000)
         self.assertAlmostEqual(points_by_iso["2025-04-08"]["capital"], 235332.10)
         self.assertAlmostEqual(points_by_iso["2025-04-08"]["value"], -103129.67)
+
+    def test_imported_raw_details_are_scoped_to_aggregate_window(self):
+        aggregate_row = stock_row()
+        aggregate_row[2] = Cell(date(2025, 10, 13))
+        aggregate_row[4] = Cell(date(2025, 10, 21))
+        aggregate_row[5] = Cell("688205")
+        aggregate_row[8] = Cell(10)
+        aggregate_row[9] = Cell(100)
+        aggregate_row[10] = Cell(103)
+        aggregate_row[11] = Cell(1)
+        aggregate_row[12] = Cell(1000)
+        aggregate_row[18] = Cell("导入自 东方两融 成交记录")
+        rows = [(95, aggregate_row)]
+
+        with tempfile.TemporaryDirectory() as temp_dir:
+            source_dir = Path(temp_dir) / "history"
+            source_dir.mkdir()
+            workbook = Workbook()
+            sheet = workbook.active
+            sheet.title = "交易记录"
+            sheet.append(["成交日期", "成交时间", "代码", "名称", "交易类别", "成交数量", "成交价格", "发生金额", "成交金额", "费用", "备注"])
+            sheet.append([date(2025, 10, 13), None, "688205", "德科立光电子", "买入", 10, 100, -1000, 1000, 0.5, None])
+            sheet.append([date(2025, 10, 21), None, "688205", "德科立光电子", "卖出", 10, 103, 1030, 1030, 0.5, None])
+            sheet.append([date(2025, 10, 30), None, "688205", "德科立光电子", "买入", 10, 105, -1050, 1050, 0.5, None])
+            sheet.append([date(2025, 11, 25), None, "688205", "德科立光电子", "卖出", 10, 142, 1420, 1420, 0.5, None])
+            workbook.save(source_dir / "东方两融.xlsx")
+
+            with patch.object(historical_curve_module, "HISTORY_SOURCE_DIR", source_dir):
+                lots = build_stock_lots(FakeCore(), rows)
+
+        self.assertEqual(len(lots), 1)
+        self.assertEqual(lots[0].open_date, date(2025, 10, 13))
+        self.assertEqual(lots[0].close_date, date(2025, 10, 21))
+        self.assertAlmostEqual(lots[0].realized_pnl or 0.0, 29.0)
 
 
 if __name__ == "__main__":

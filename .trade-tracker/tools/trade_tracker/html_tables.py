@@ -1437,6 +1437,7 @@ def annual_period_cell(label: str, year: str, item: dict[str, object], stock_map
     native_pnl = parse_float(item.get("nativePnl"))
     native_realized_pnl = parse_float(item.get("nativeRealizedPnl"))
     native_float_pnl = parse_float(item.get("nativeFloatPnl"))
+    native_dividend_pnl = parse_float(item.get("nativeDividendPnl"))
     rate_percent = parse_float(item.get("rate"))
     days = annual_days_for_period_item(year, item, stock_map)
     period_open = bool(item.get("openAtPeriodEnd"))
@@ -1451,7 +1452,7 @@ def annual_period_cell(label: str, year: str, item: dict[str, object], stock_map
     if label == "最后清仓时间":
         return default_td_for_label(label) if period_open else stock_map.get(label) or default_td_for_label(label)
     if label == "已实现盈亏":
-        return numeric_td(label, native_realized_pnl if period_open else native_pnl)
+        return numeric_td(label, native_realized_pnl)
     if label == "总盈亏":
         return numeric_td(label, native_pnl)
     if label == "总收益率":
@@ -1463,7 +1464,7 @@ def annual_period_cell(label: str, year: str, item: dict[str, object], stock_map
     if label == "持仓浮盈亏":
         return numeric_td(label, native_float_pnl if period_open and native_float_pnl is not None and abs(native_float_pnl) > 0.005 else None)
     if label == "分红净额":
-        return numeric_td(label, 0.0)
+        return numeric_td(label, native_dividend_pnl)
     if label == "已平仓笔数":
         closed_count = parse_float(item.get("closedCount"))
         if closed_count is not None:

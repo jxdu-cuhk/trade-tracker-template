@@ -39,6 +39,7 @@ from trade_tracker.html_tables import (
 )
 from trade_tracker.holdings_daily import apply_segmented_daily_pnl
 from trade_tracker.dividends import DIVIDEND_SHEET_NAME, load_dividend_events, load_workbook_dividend_events
+from trade_tracker.historical_curve import build_performance_stock_payload
 from trade_tracker.options import build_stock_realized_income_maps, open_option_mark_for_row, option_strategy_capital, patch_dashboard_data_with_options
 from trade_tracker import state
 
@@ -311,8 +312,209 @@ class RealizedCostAdjustmentTests(unittest.TestCase):
         self.assertEqual(patched["cost_text"], "人民币 9,605.00")
         self.assertEqual(patched["unrealized_pnl_text"], "人民币 1,895.00")
         self.assertEqual(patched["stock_summary"][0]["total_pnl"], "人民币 1,895.00")
+        self.assertEqual(patched["stock_summary"][0]["return_rate"], "19.73%")
         self.assertEqual(patched["annual_summary"][0]["total_pnl"], "人民币 1,895.00")
+        self.assertEqual(patched["annual_summary"][0]["return_rate"], "19.73%")
         self.assertEqual(patched["annual_summary"][1]["total_pnl"], "人民币 -50.00")
+
+    def test_prior_cleared_cycle_does_not_reduce_new_holding_cost(self):
+        current_year = str(date.today().year)
+        prior_cycle = row(
+            kind="股票",
+            open_date=date(2026, 1, 1),
+            close_date=date(2026, 1, 10),
+            ticker="TICKER_A",
+            event="现股",
+            qty=100,
+            open_price=10,
+            close_price=15,
+            fee=0,
+            pnl=500,
+            currency="人民币",
+        )
+        current_open = row(
+            kind="股票",
+            open_date=date(2026, 2, 1),
+            ticker="TICKER_A",
+            event="现股",
+            qty=100,
+            open_price=100,
+            fee=0,
+            currency="人民币",
+        )
+        data = {
+            "holdings": [
+                {
+                    "ticker": "TICKER_A",
+                    "currency": "人民币",
+                    "side": "多头",
+                    "qty": "100",
+                    "all_in_cost": "人民币 10,000.00",
+                    "avg_cost": "人民币 100.00",
+                    "market_value": "人民币 9,500.00",
+                    "last_price": "人民币 95.00",
+                    "float_pnl": "人民币 -500.00",
+                    "daily_pnl": "人民币 0.00",
+                }
+            ],
+            "stock_summary": [
+                {
+                    "ticker": "TICKER_A",
+                    "currency": "人民币",
+                    "realized_pnl": "人民币 500.00",
+                    "dividend": "人民币 0.00",
+                    "unrealized_pnl": "人民币 -500.00",
+                    "total_pnl": "人民币 0.00",
+                    "capital_raw": 10_000.0,
+                    "capital_days_raw": 100_000.0,
+                }
+            ],
+            "annual_summary": [
+                {
+                    "year": current_year,
+                    "ticker": "TICKER_A",
+                    "currency": "人民币",
+                    "realized_pnl": "人民币 500.00",
+                    "dividend": "人民币 0.00",
+                    "unrealized_pnl": "人民币 -500.00",
+                    "total_pnl": "人民币 0.00",
+                    "capital_raw": 10_000.0,
+                    "capital_days_raw": 100_000.0,
+                }
+            ],
+        }
+
+        patched = patch_dashboard_data_with_options(FakeCore(), [(2, prior_cycle), (3, current_open)], data)
+        holding = patched["holdings"][0]
+
+        self.assertEqual(holding["all_in_cost"], "人民币 10,000.00")
+        self.assertEqual(holding["float_pnl"], "人民币 -500.00")
+        self.assertEqual(patched["stock_summary"][0]["total_pnl"], "人民币 0.00")
+        self.assertEqual(patched["stock_summary"][0]["return_rate"], "-5.00%")
+        self.assertEqual(patched["annual_summary"][0]["total_pnl"], "人民币 0.00")
+        self.assertEqual(patched["annual_summary"][0]["return_rate"], "-5.00%")
+
+    def test_current_cycle_partial_close_still_reduces_holding_cost_after_prior_clear(self):
+        current_year = str(date.today().year)
+        prior_cycle = row(
+            kind="股票",
+            open_date=date(2026, 1, 1),
+            close_date=date(2026, 1, 10),
+            ticker="TICKER_A",
+            event="现股",
+            qty=100,
+            open_price=10,
+            close_price=15,
+            fee=0,
+            pnl=500,
+            currency="人民币",
+        )
+        current_open = row(
+            kind="股票",
+            open_date=date(2026, 2, 1),
+            ticker="TICKER_A",
+            event="现股",
+            qty=100,
+            open_price=100,
+            fee=0,
+            currency="人民币",
+        )
+        current_partial_close = row(
+            kind="股票",
+            open_date=date(2026, 2, 1),
+            close_date=date(2026, 2, 10),
+            ticker="TICKER_A",
+            event="现股",
+            qty=20,
+            open_price=100,
+            close_price=110,
+            fee=0,
+            pnl=200,
+            currency="人民币",
+        )
+        data = {
+            "holdings": [
+                {
+                    "ticker": "TICKER_A",
+                    "currency": "人民币",
+                    "side": "多头",
+                    "qty": "100",
+                    "all_in_cost": "人民币 10,000.00",
+                    "avg_cost": "人民币 100.00",
+                    "market_value": "人民币 9,500.00",
+                    "last_price": "人民币 95.00",
+                    "float_pnl": "人民币 -500.00",
+                    "daily_pnl": "人民币 0.00",
+                }
+            ],
+            "stock_summary": [
+                {
+                    "ticker": "TICKER_A",
+                    "currency": "人民币",
+                    "realized_pnl": "人民币 700.00",
+                    "dividend": "人民币 0.00",
+                    "unrealized_pnl": "人民币 -300.00",
+                    "total_pnl": "人民币 200.00",
+                    "capital_raw": 10_000.0,
+                    "capital_days_raw": 100_000.0,
+                }
+            ],
+            "annual_summary": [
+                {
+                    "year": current_year,
+                    "ticker": "TICKER_A",
+                    "currency": "人民币",
+                    "realized_pnl": "人民币 700.00",
+                    "dividend": "人民币 0.00",
+                    "unrealized_pnl": "人民币 -300.00",
+                    "total_pnl": "人民币 200.00",
+                    "capital_raw": 10_000.0,
+                    "capital_days_raw": 100_000.0,
+                }
+            ],
+        }
+
+        patched = patch_dashboard_data_with_options(
+            FakeCore(),
+            [(2, prior_cycle), (3, current_open), (4, current_partial_close)],
+            data,
+        )
+        holding = patched["holdings"][0]
+
+        self.assertEqual(holding["all_in_cost"], "人民币 9,800.00")
+        self.assertEqual(holding["float_pnl"], "人民币 -300.00")
+        self.assertEqual(patched["stock_summary"][0]["total_pnl"], "人民币 200.00")
+        self.assertEqual(patched["stock_summary"][0]["return_rate"], "-3.06%")
+        self.assertEqual(patched["annual_summary"][0]["total_pnl"], "人民币 200.00")
+        self.assertEqual(patched["annual_summary"][0]["return_rate"], "-3.06%")
+
+    def test_performance_stock_rate_uses_app_adjusted_cost_after_extra_buy(self):
+        demo = {
+            "code": "DEMO",
+            "name": "DEMO",
+            "currency": "人民币",
+            "currency_raw": "CNY",
+        }
+        snapshots = {
+            date(2026, 5, 1): {
+                ("DEMO", "人民币"): {**demo, "value": 0.0, "capital": 1000.0, "market_value": 1000.0, "net_flow": 1000.0}
+            },
+            date(2026, 5, 2): {
+                ("DEMO", "人民币"): {**demo, "value": 1000.0, "capital": 1000.0, "market_value": 2000.0, "net_flow": 0.0}
+            },
+            date(2026, 5, 3): {
+                ("DEMO", "人民币"): {**demo, "value": 1000.0, "capital": 3000.0, "market_value": 4000.0, "net_flow": 2000.0}
+            },
+        }
+
+        with patch("trade_tracker.historical_curve.current_fx_rates_to_cny", return_value={"人民币": 1.0}):
+            payload = build_performance_stock_payload(snapshots)
+
+        month_item = payload["months"]["2026-05"][0]
+        year_item = payload["years"]["2026"][0]
+        self.assertAlmostEqual(month_item["pnl"], 1000.0)
+        self.assertAlmostEqual(month_item["rate"], 1000.0 / 3000.0 * 100)
+        self.assertAlmostEqual(year_item["rate"], 1000.0 / 3000.0 * 100)
 
     def test_segmented_daily_pnl_uses_entry_price_for_today_lots(self):
         today = date(2026, 5, 11)

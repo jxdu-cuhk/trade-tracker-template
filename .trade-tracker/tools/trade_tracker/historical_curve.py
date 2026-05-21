@@ -66,6 +66,7 @@ class RealizedCurveEvent:
     currency: str
     pnl: float
     ticker: str = ""
+    kind: str = ""
 
 
 def date_label(day: date) -> str:
@@ -590,6 +591,43 @@ def reconcile_detailed_lot_pnl_to_aggregate(
     return reconciled
 
 
+def detailed_lot_is_inside_aggregate_window(detail: StockCurveLot, aggregate: StockCurveLot) -> bool:
+    if aggregate.close_date is None or detail.close_date is None:
+        return False
+    if lot_group_key(detail) != lot_group_key(aggregate):
+        return False
+    return aggregate.open_date <= detail.open_date and detail.close_date <= aggregate.close_date
+
+
+def replace_aggregate_lots_with_windowed_details(
+    lots: list[StockCurveLot],
+    detailed_lots: list[StockCurveLot],
+) -> list[StockCurveLot]:
+    if not lots or not detailed_lots:
+        return lots
+
+    replacements: list[StockCurveLot] = []
+    replaced_ids: set[int] = set()
+    used_detail_indexes: set[int] = set()
+    for aggregate in lots:
+        if not aggregate.source or aggregate.close_date is None:
+            continue
+        matches: list[tuple[int, StockCurveLot]] = [
+            (index, detail)
+            for index, detail in enumerate(detailed_lots)
+            if index not in used_detail_indexes and detailed_lot_is_inside_aggregate_window(detail, aggregate)
+        ]
+        if not matches:
+            continue
+        used_detail_indexes.update(index for index, _detail in matches)
+        replacements.extend(reconcile_detailed_lot_pnl_to_aggregate([detail for _index, detail in matches], [aggregate]))
+        replaced_ids.add(id(aggregate))
+
+    if not replacements:
+        return lots
+    return [lot for lot in lots if id(lot) not in replaced_ids] + replacements
+
+
 def non_stock_realized_event_from_row(core, cells: dict[int, object]) -> RealizedCurveEvent | None:
     event = raw_text_value(core, cells, 6)
     if event in STOCK_EVENTS:
@@ -613,7 +651,7 @@ def non_stock_realized_event_from_row(core, cells: dict[int, object]) -> Realize
         ticker = clean_text(core.normalize_ticker(cell_raw(cells, 5), cell_raw(cells, 20)))
     except Exception:
         ticker = clean_text(cell_raw(cells, 5)).upper()
-    return RealizedCurveEvent(close_date or date.today(), currency, float(pnl), ticker)
+    return RealizedCurveEvent(close_date or date.today(), currency, float(pnl), ticker, "non_stock")
 
 
 def build_stock_lots(core, rows: list[tuple[int, dict[int, object]]]) -> list[StockCurveLot]:
@@ -624,15 +662,8 @@ def build_stock_lots(core, rows: list[tuple[int, dict[int, object]]]) -> list[St
             lots.append(lot)
     aggregate_sources = {lot.source for lot in lots if lot.source and lot.close_date is not None}
     detailed_lots = load_raw_source_closed_lots(core, aggregate_sources)
-    detailed_sources = {lot.source for lot in detailed_lots}
-    if detailed_sources:
-        aggregate_closed_lots = [lot for lot in lots if lot.source in detailed_sources and lot.close_date is not None]
-        aggregate_groups = {lot_group_key(lot) for lot in aggregate_closed_lots}
-        detailed_lots = [lot for lot in detailed_lots if lot_group_key(lot) in aggregate_groups]
-        detailed_lots = reconcile_detailed_lot_pnl_to_aggregate(detailed_lots, aggregate_closed_lots)
-        detailed_groups = {lot_group_key(lot) for lot in detailed_lots}
-        lots = [lot for lot in lots if not (lot.close_date is not None and lot_group_key(lot) in detailed_groups)]
-        lots.extend(detailed_lots)
+    if detailed_lots:
+        lots = replace_aggregate_lots_with_windowed_details(lots, detailed_lots)
     return lots
 
 
@@ -665,7 +696,7 @@ def build_dividend_realized_events(core) -> list[RealizedCurveEvent]:
             ticker = clean_text(core.normalize_ticker(item.get("ticker"), item.get("currency")))
         except Exception:
             ticker = clean_text(item.get("ticker")).upper()
-        events.append(RealizedCurveEvent(event_date, currency, float(amount), ticker))
+        events.append(RealizedCurveEvent(event_date, currency, float(amount), ticker, "dividend"))
     return events
 
 
@@ -774,7 +805,7 @@ def residual_realized_events_from_summary(
         if abs(amount) <= 0.01:
             continue
         event_date = latest_date_by_key.get((ticker, currency)) or date.today()
-        events.append(RealizedCurveEvent(event_date, currency, amount, ticker))
+        events.append(RealizedCurveEvent(event_date, currency, amount, ticker, "residual"))
     return events
 
 
@@ -1068,6 +1099,9 @@ def add_stock_snapshot_value(
     market_value: float = 0.0,
     realized_amount: float = 0.0,
     float_amount: float = 0.0,
+    dividend_amount: float = 0.0,
+    net_flow: float = 0.0,
+    position_quantity: float = 0.0,
     closed_count: int = 0,
 ) -> None:
     if not ticker or not currency:
@@ -1078,6 +1112,9 @@ def add_stock_snapshot_value(
         and abs(market_value) <= EPSILON
         and abs(realized_amount) <= EPSILON
         and abs(float_amount) <= EPSILON
+        and abs(dividend_amount) <= EPSILON
+        and abs(net_flow) <= EPSILON
+        and abs(position_quantity) <= EPSILON
         and not closed_count
     ):
         return
@@ -1092,6 +1129,9 @@ def add_stock_snapshot_value(
             "value": 0.0,
             "realized_value": 0.0,
             "float_value": 0.0,
+            "dividend_value": 0.0,
+            "net_flow": 0.0,
+            "position_quantity": 0.0,
             "capital": 0.0,
             "closed_count": 0.0,
         }
@@ -1099,6 +1139,9 @@ def add_stock_snapshot_value(
     item["value"] = float(item.get("value") or 0.0) + float(amount)
     item["realized_value"] = float(item.get("realized_value") or 0.0) + float(realized_amount)
     item["float_value"] = float(item.get("float_value") or 0.0) + float(float_amount)
+    item["dividend_value"] = float(item.get("dividend_value") or 0.0) + float(dividend_amount)
+    item["net_flow"] = float(item.get("net_flow") or 0.0) + float(net_flow)
+    item["position_quantity"] = float(item.get("position_quantity") or 0.0) + float(position_quantity)
     item["closed_count"] = float(item.get("closed_count") or 0.0) + float(closed_count)
     if capital and capital > EPSILON:
         item["capital"] = float(item.get("capital") or 0.0) + float(capital)
@@ -1128,44 +1171,6 @@ def build_performance_stock_payload(
         for key, item in snapshots[day].items():
             history_by_stock.setdefault(key, []).append((day, item))
 
-    def add_period(
-        periods: dict[str, list[dict[str, object]]],
-        period_key: str,
-        end_item: dict[str, object],
-        delta: float,
-        capital: float,
-        realized_delta: float,
-        float_delta: float,
-        closed_count: float,
-    ) -> None:
-        source_currency = clean_text(end_item.get("currency"))
-        rate = cny_rate_for_currency(source_currency, rates)
-        pnl = delta * rate
-        if abs(pnl) <= 0.005:
-            return
-        cny_capital = capital * rate
-        return_rate = (pnl / cny_capital) * 100 if cny_capital > EPSILON else None
-        period_end_market_value = abs(snapshot_float(end_item, "market_value"))
-        periods.setdefault(period_key, []).append(
-            {
-                "code": clean_text(end_item.get("code")),
-                "name": clean_text(end_item.get("name")) or clean_text(end_item.get("code")),
-                "currency": source_currency,
-                "pnl": pnl,
-                "nativePnl": delta,
-                "realizedPnl": realized_delta * rate,
-                "nativeRealizedPnl": realized_delta,
-                "floatPnl": float_delta * rate,
-                "nativeFloatPnl": float_delta,
-                "periodEndMarketValue": period_end_market_value * rate,
-                "nativePeriodEndMarketValue": period_end_market_value,
-                "openAtPeriodEnd": period_end_market_value > EPSILON,
-                "closedCount": max(0, int(round(closed_count))),
-                "capital": cny_capital,
-                "rate": return_rate,
-            }
-        )
-
     def snapshot_float(item: dict[str, object] | None, key: str) -> float:
         if not item:
             return 0.0
@@ -1184,6 +1189,58 @@ def build_performance_stock_payload(
         value = snapshot_float(item, "value")
         implied_market_value = abs(capital + value)
         return implied_market_value if implied_market_value > EPSILON else abs(capital)
+
+    def app_style_return_rate(delta: float, capital: float, end_item: dict[str, object]) -> float | None:
+        period_end_market_value = abs(snapshot_float(end_item, "market_value"))
+        if period_end_market_value > EPSILON:
+            quantity = snapshot_float(end_item, "position_quantity")
+            adjusted_cost = period_end_market_value + delta if quantity < -EPSILON else period_end_market_value - delta
+            if abs(adjusted_cost) > EPSILON:
+                return delta / abs(adjusted_cost) * 100.0
+        return delta / capital * 100.0 if capital > EPSILON else None
+
+    def add_period(
+        periods: dict[str, list[dict[str, object]]],
+        period_key: str,
+        end_item: dict[str, object],
+        delta: float,
+        capital: float,
+        realized_delta: float,
+        float_delta: float,
+        dividend_delta: float,
+        closed_count: float,
+    ) -> None:
+        code = clean_text(end_item.get("code"))
+        source_currency = clean_text(end_item.get("currency"))
+        rate = cny_rate_for_currency(source_currency, rates)
+        pnl = delta * rate
+        if abs(pnl) <= 0.005:
+            return
+        cny_capital = capital * rate
+        return_rate = app_style_return_rate(delta, capital, end_item)
+        period_end_market_value = abs(snapshot_float(end_item, "market_value"))
+        trade_realized_delta = realized_delta - dividend_delta
+        periods.setdefault(period_key, []).append(
+            {
+                "code": code,
+                "name": clean_text(end_item.get("name")) or code,
+                "currency": source_currency,
+                "pnl": pnl,
+                "nativePnl": delta,
+                "realizedPnl": trade_realized_delta * rate,
+                "nativeRealizedPnl": trade_realized_delta,
+                "floatPnl": float_delta * rate,
+                "nativeFloatPnl": float_delta,
+                "dividendPnl": dividend_delta * rate,
+                "nativeDividendPnl": dividend_delta,
+                "periodEndMarketValue": period_end_market_value * rate,
+                "nativePeriodEndMarketValue": period_end_market_value,
+                "openAtPeriodEnd": period_end_market_value > EPSILON,
+                "closedCount": max(0, int(round(closed_count))),
+                "capital": cny_capital,
+                "rate": return_rate,
+            }
+        )
 
     def snapshot_delta(
         end_item: dict[str, object],
@@ -1238,6 +1295,7 @@ def build_performance_stock_payload(
                 period_return_capital(base, end_item),
                 snapshot_delta(end_item, base, "realized_value"),
                 snapshot_delta(end_item, base, "float_value"),
+                snapshot_delta(end_item, base, "dividend_value"),
                 snapshot_delta(end_item, base, "closed_count"),
             )
 
@@ -1251,6 +1309,7 @@ def build_performance_stock_payload(
                 period_return_capital(base, end_item),
                 snapshot_delta(end_item, base, "realized_value"),
                 snapshot_delta(end_item, base, "float_value"),
+                snapshot_delta(end_item, base, "dividend_value"),
                 snapshot_delta(end_item, base, "closed_count"),
             )
 
@@ -1379,6 +1438,7 @@ def build_historical_curve_series(core, rows: list[tuple[int, dict[int, object]]
                     continue
                 history = histories.get((lot.ticker, lot.currency), {})
                 realized_amount = realized_pnl_for_curve(lot, history)
+                close_flow = -(lot.capital + realized_amount) if lot.close_date == day else 0.0
                 add_stock_snapshot_value(
                     stock_values,
                     ticker=lot.ticker,
@@ -1388,11 +1448,13 @@ def build_historical_curve_series(core, rows: list[tuple[int, dict[int, object]]
                     amount=realized_amount,
                     capital=lot.capital,
                     realized_amount=realized_amount,
+                    net_flow=close_flow,
                     closed_count=1,
                 )
             for event in stock_value_events:
                 if event.currency != currency or not event.ticker or event.event_date > day:
                     continue
+                event_flow = -event.pnl if event.event_date == day else 0.0
                 add_stock_snapshot_value(
                     stock_values,
                     ticker=event.ticker,
@@ -1401,6 +1463,8 @@ def build_historical_curve_series(core, rows: list[tuple[int, dict[int, object]]
                     currency_raw=event.currency,
                     amount=event.pnl,
                     realized_amount=event.pnl,
+                    dividend_amount=event.pnl if event.kind == "dividend" else 0.0,
+                    net_flow=event_flow,
                 )
             unrealized_total = 0.0
             active_capital = 0.0
@@ -1415,7 +1479,21 @@ def build_historical_curve_series(core, rows: list[tuple[int, dict[int, object]]
                 has_active_position = True
                 active_capital += lot.capital
                 if day <= lot.open_date:
-                    active_market_value += lot.open_price * abs(lot.quantity)
+                    opening_market_value = lot.open_price * abs(lot.quantity)
+                    active_market_value += opening_market_value
+                    add_stock_snapshot_value(
+                        stock_values,
+                        ticker=lot.ticker,
+                        name=resolve_stock_name(core, lot.ticker, lot.currency, lot.currency_raw, name_sources, name_cache),
+                        currency=lot.currency,
+                        currency_raw=lot.currency_raw,
+                        amount=0.0,
+                        capital=lot.capital,
+                        market_value=opening_market_value,
+                        float_amount=0.0,
+                        net_flow=lot.capital,
+                        position_quantity=lot.quantity,
+                    )
                     continue
                 history = histories.get((lot.ticker, lot.currency), {})
                 price = mark_price_for_curve_day(lot, day, history, current_prices)
@@ -1438,6 +1516,8 @@ def build_historical_curve_series(core, rows: list[tuple[int, dict[int, object]]
                     capital=lot.capital,
                     market_value=market_value,
                     float_amount=floating,
+                    net_flow=lot.capital if lot.open_date == day else 0.0,
+                    position_quantity=lot.quantity,
                 )
             if not has_active_position and not has_priced_position and not closed_on_day and not event_on_day:
                 continue

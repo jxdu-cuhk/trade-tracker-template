@@ -124,6 +124,75 @@ def option_strategy_capital(core, cells: dict[int, object], trade_type: str, eve
     return 0.0
 
 
+def stock_position_key(core, ticker: object, currency: object) -> tuple[str, str] | None:
+    try:
+        currency_raw = core.normalize_currency(currency)
+    except Exception:
+        currency_raw = clean_text(currency)
+    try:
+        normalized_ticker = core.normalize_ticker(ticker, currency_raw)
+    except Exception:
+        normalized_ticker = clean_text(ticker).upper()
+    currency_label = display_currency_label(core, currency_raw)
+    if not normalized_ticker or not currency_label:
+        return None
+    return clean_text(normalized_ticker), clean_text(currency_label)
+
+
+def build_current_cycle_boundaries(core, rows: list[tuple[int, dict[int, object]]]) -> dict[tuple[str, str], dict[str, date | None]]:
+    events_by_key: dict[tuple[str, str], list[tuple[date, int, float]]] = {}
+    for _row_number, cells in rows:
+        if raw_text_value(core, cells, 6) not in STOCK_EVENTS:
+            continue
+        open_date = excel_serial_to_date(cell_raw(cells, 2))
+        quantity = raw_number(cells, 8)
+        if open_date is None or quantity in (None, 0):
+            continue
+        key = stock_position_key(core, cell_raw(cells, 5), cell_raw(cells, 20))
+        if key is None:
+            continue
+        trade_type = core_trade_type(raw_text_value(core, cells, 1))
+        signed_quantity = -abs(float(quantity)) if trade_type == "sell" else abs(float(quantity))
+        events_by_key.setdefault(key, []).append((open_date, 0, signed_quantity))
+        close_date = excel_serial_to_date(cell_raw(cells, 4))
+        if close_date is not None:
+            events_by_key[key].append((close_date, 1, -signed_quantity))
+
+    boundaries: dict[tuple[str, str], dict[str, date | None]] = {}
+    for key, events in events_by_key.items():
+        position = 0.0
+        last_clear = None
+        active_start = None
+        for event_date, order, delta in sorted(events, key=lambda item: (item[0], item[1])):
+            was_flat = abs(position) <= EPSILON
+            position += delta
+            is_flat = abs(position) <= EPSILON
+            if was_flat and not is_flat:
+                active_start = event_date
+            if not was_flat and is_flat:
+                last_clear = event_date
+                active_start = None
+        if abs(position) > EPSILON and active_start is not None:
+            boundaries[key] = {"start": active_start, "last_clear": last_clear}
+    return boundaries
+
+
+def build_current_cycle_clear_dates(core, rows: list[tuple[int, dict[int, object]]]) -> dict[tuple[str, str], date]:
+    return {
+        key: boundary["last_clear"]
+        for key, boundary in build_current_cycle_boundaries(core, rows).items()
+        if isinstance(boundary.get("last_clear"), date)
+    }
+
+
+def is_current_cycle_event(key: tuple[str, str], event_date: date | None, boundaries: dict[tuple[str, str], dict[str, date | None]]) -> bool:
+    boundary = boundaries.get(key)
+    if boundary is None:
+        return True
+    start = boundary.get("start")
+    return isinstance(start, date) and event_date is not None and event_date >= start
+
+
 def option_tone_class(value: float | None) -> str:
     if value is None:
         return ""
@@ -272,7 +341,8 @@ def option_income_for_row(core, cells: dict[int, object]) -> dict[str, object] |
         return None
 
     close_price = raw_number(cells, 10)
-    is_closed = excel_serial_to_date(cell_raw(cells, 4)) is not None or close_price is not None
+    close_date = excel_serial_to_date(cell_raw(cells, 4))
+    is_closed = close_date is not None or close_price is not None
     gross_open = abs(qty) * multiplier * open_price
     if is_closed:
         close_price = close_price or 0.0
@@ -291,19 +361,29 @@ def option_income_for_row(core, cells: dict[int, object]) -> dict[str, object] |
         "currency_raw": currency,
         "income": income,
         "is_open": not is_closed,
+        "open_date": open_date,
+        "close_date": close_date,
         "open_year": str(open_date.year) if open_date else "",
         "capital": float(capital or 0.0),
         "capital_days": float(capital or 0.0) * days,
     }
 
 
-def build_option_income_maps(core, rows: list[tuple[int, dict[int, object]]]) -> dict[tuple[str, str], dict[str, object]]:
+def build_option_income_maps(
+    core,
+    rows: list[tuple[int, dict[int, object]]],
+    boundaries: dict[tuple[str, str], dict[str, date | None]] | None = None,
+) -> dict[tuple[str, str], dict[str, object]]:
     adjustments: dict[tuple[str, str], dict[str, object]] = {}
+    boundaries = boundaries or {}
     for _row_number, cells in rows:
         option = option_income_for_row(core, cells)
         if not option:
             continue
         key = (str(option["ticker"]), str(option["currency"]))
+        event_date = option.get("open_date") if option["is_open"] else option.get("close_date") or option.get("open_date")
+        if not is_current_cycle_event(key, event_date if isinstance(event_date, date) else None, boundaries):
+            continue
         bucket = adjustments.setdefault(
             key,
             {
@@ -336,7 +416,8 @@ def stock_realized_income_for_row(core, cells: dict[int, object]) -> dict[str, o
     if event not in STOCK_EVENTS:
         return None
 
-    is_closed = excel_serial_to_date(cell_raw(cells, 4)) is not None or raw_number(cells, 10) is not None
+    close_date = excel_serial_to_date(cell_raw(cells, 4))
+    is_closed = close_date is not None or raw_number(cells, 10) is not None
     if not is_closed:
         return None
 
@@ -358,17 +439,55 @@ def stock_realized_income_for_row(core, cells: dict[int, object]) -> dict[str, o
         "ticker": ticker,
         "currency": currency_label,
         "income": float(pnl),
+        "date": close_date,
     }
 
 
-def build_stock_realized_income_maps(core, rows: list[tuple[int, dict[int, object]]]) -> dict[tuple[str, str], float]:
+def build_stock_realized_income_maps(
+    core,
+    rows: list[tuple[int, dict[int, object]]],
+    boundaries: dict[tuple[str, str], dict[str, date | None]] | None = None,
+) -> dict[tuple[str, str], float]:
     adjustments: dict[tuple[str, str], float] = {}
+    boundaries = boundaries or {}
     for _row_number, cells in rows:
         realized = stock_realized_income_for_row(core, cells)
         if not realized:
             continue
         key = (str(realized["ticker"]), str(realized["currency"]))
+        event_date = realized.get("date")
+        if not is_current_cycle_event(key, event_date if isinstance(event_date, date) else None, boundaries):
+            continue
         adjustments[key] = adjustments.get(key, 0.0) + float(realized["income"])
+    return adjustments
+
+
+def build_current_cycle_dividend_income_maps(
+    core,
+    data: dict[str, object],
+    boundaries: dict[tuple[str, str], dict[str, date | None]],
+) -> dict[tuple[str, str], float]:
+    if not boundaries or not hasattr(core, "load_dividend_events"):
+        return build_dividend_income_maps(data)
+    try:
+        events = core.load_dividend_events() or []
+    except Exception:
+        events = []
+    if not events:
+        return build_dividend_income_maps(data)
+
+    adjustments: dict[tuple[str, str], float] = {}
+    for event in events:
+        if not isinstance(event, dict):
+            continue
+        key = stock_position_key(core, event.get("ticker"), event.get("currency"))
+        if key is None:
+            continue
+        amount = parse_display_number(event.get("amount"))
+        event_date = excel_serial_to_date(event.get("serial")) or excel_serial_to_date(event.get("date"))
+        if amount is None or not is_current_cycle_event(key, event_date, boundaries):
+            continue
+        adjustments[key] = adjustments.get(key, 0.0) + float(amount)
     return adjustments
 
 
@@ -605,6 +724,60 @@ def add_open_short_put_capital_to_summaries(data: dict[str, object], exposures: 
                 row["annualized"] = format_signed_percent(total_pnl * 365.0 / float(row["capital_days_raw"]))
 
 
+def holding_cycle_return_rate(holding: dict[str, object]) -> float | None:
+    float_pnl = parse_display_number(holding.get("float_pnl"))
+    adjusted_cost = parse_display_number(holding.get("all_in_cost"))
+    if float_pnl is None or adjusted_cost is None or abs(adjusted_cost) <= EPSILON:
+        return None
+    return float_pnl / abs(adjusted_cost)
+
+
+def holding_cycle_days(
+    key: tuple[str, str],
+    holding: dict[str, object],
+    boundaries: dict[tuple[str, str], dict[str, date | None]] | None,
+) -> int | None:
+    start = None
+    if boundaries:
+        boundary = boundaries.get(key)
+        if boundary:
+            start = boundary.get("start")
+    if not isinstance(start, date):
+        start = excel_serial_to_date(holding.get("last_buy")) or excel_serial_to_date(holding.get("recent_buy"))
+    if not isinstance(start, date):
+        return None
+    return max((date.today() - start).days, 1)
+
+
+def sync_holding_cycle_return_rates_to_summaries(
+    data: dict[str, object],
+    boundaries: dict[tuple[str, str], dict[str, date | None]] | None = None,
+) -> None:
+    holdings_by_key = {
+        (clean_text(holding.get("ticker")), clean_text(holding.get("currency"))): holding
+        for holding in data.get("holdings", []) or []
+        if isinstance(holding, dict)
+    }
+    if not holdings_by_key:
+        return
+
+    for summary_key in ("stock_summary", "annual_summary"):
+        for row in data.get(summary_key, []) or []:
+            if summary_key == "annual_summary" and clean_text(row.get("year")) != str(date.today().year):
+                continue
+            key = (clean_text(row.get("ticker")), clean_text(row.get("currency")))
+            holding = holdings_by_key.get(key)
+            if not holding:
+                continue
+            return_rate = holding_cycle_return_rate(holding)
+            if return_rate is None:
+                continue
+            row["return_rate"] = format_signed_percent(return_rate)
+            days = holding_cycle_days(key, holding, boundaries)
+            if days:
+                row["annualized"] = format_signed_percent(return_rate * 365.0 / days)
+
+
 def recompute_current_holding_totals(data: dict[str, object]) -> None:
     totals = {
         "market_value_text": {},
@@ -633,7 +806,10 @@ def recompute_current_holding_totals(data: dict[str, object]) -> None:
         data[output_key] = format_currency_amounts(amounts)
 
 
-def sync_adjusted_holdings_to_summaries(data: dict[str, object], *, dividend_in_holding_cost: bool = False) -> None:
+def sync_adjusted_holdings_to_summaries(
+    data: dict[str, object],
+    applied_income_by_key: dict[tuple[str, str], float],
+) -> None:
     holdings_by_key = {
         (clean_text(holding.get("ticker")), clean_text(holding.get("currency"))): holding
         for holding in data.get("holdings", []) or []
@@ -653,41 +829,48 @@ def sync_adjusted_holdings_to_summaries(data: dict[str, object], *, dividend_in_
             if adjusted_unrealized is None:
                 continue
             currency_label = clean_text(row.get("currency") or "")
+            realized_raw = parse_display_number(row.get("realized_pnl"))
+            realized = realized_raw or 0.0
             dividend = parse_display_number(row.get("dividend")) or 0.0
-            total_pnl = adjusted_unrealized if dividend_in_holding_cost else adjusted_unrealized + dividend
+            applied_income = float(applied_income_by_key.get(key, 0.0))
+            total_pnl = (
+                adjusted_unrealized
+                if realized_raw is None and "realized_pnl" not in row
+                else adjusted_unrealized + realized + dividend - applied_income
+            )
             row["unrealized_pnl"] = format_money_text(currency_label, adjusted_unrealized)
             row["total_pnl_raw"] = total_pnl
             row["total_pnl"] = format_money_text(currency_label, total_pnl)
             row["sort_value"] = total_pnl
-            capital = float(row.get("capital_raw") or 0.0)
-            capital_days = float(row.get("capital_days_raw") or 0.0)
-            if capital:
-                row["return_rate"] = format_signed_percent(total_pnl / capital)
-            if capital_days:
-                row["annualized"] = format_signed_percent(total_pnl * 365.0 / capital_days)
 
 
 def patch_dashboard_data_with_options(core, rows, data: dict[str, object]) -> dict[str, object]:
     state.OPEN_OPTION_MARKS = build_open_option_marks(core, rows)
-    option_adjustments = build_option_income_maps(core, rows)
+    boundaries = build_current_cycle_boundaries(core, rows)
+    option_adjustments = build_option_income_maps(core, rows, boundaries)
     short_put_exposures = build_open_short_put_exposure_maps(core, rows)
-    stock_adjustments = build_stock_realized_income_maps(core, rows)
-    dividend_adjustments = build_dividend_income_maps(data)
+    stock_adjustments = build_stock_realized_income_maps(core, rows, boundaries)
+    dividend_adjustments = build_current_cycle_dividend_income_maps(core, data, boundaries)
     if not option_adjustments and not short_put_exposures and not stock_adjustments and not dividend_adjustments:
+        sync_holding_cycle_return_rates_to_summaries(data, boundaries)
         return data
 
+    applied_income_by_key: dict[tuple[str, str], float] = {}
     for holding in data.get("holdings", []) or []:
         key = (clean_text(holding.get("ticker")), clean_text(holding.get("currency")))
         option_income = float(option_adjustments.get(key, {}).get("closed_income", 0.0))
         stock_income = float(stock_adjustments.get(key, 0.0))
         dividend_income = float(dividend_adjustments.get(key, 0.0))
-        adjust_holding_for_realized_income(holding, option_income + stock_income + dividend_income)
+        applied_income = option_income + stock_income + dividend_income
+        applied_income_by_key[key] = applied_income
+        adjust_holding_for_realized_income(holding, applied_income)
     apply_open_short_put_exposures_to_holdings(core, data, short_put_exposures)
     recompute_current_holding_totals(data)
-    sync_adjusted_holdings_to_summaries(data, dividend_in_holding_cost=True)
+    sync_adjusted_holdings_to_summaries(data, applied_income_by_key)
     add_open_short_put_capital_to_summaries(data, short_put_exposures)
+    sync_holding_cycle_return_rates_to_summaries(data, boundaries)
 
     note = clean_text(data.get("totals_note") or "")
-    option_note = "已平仓/到期作废期权、已完成现股交易和分红净额归入对应标的；当前持仓成本按已实现净收益调低，卖出认沽按占用本金计入当前持仓市值和仓位，未录入本金时按 cash-secured 口径推导，covered call 不重复计入。"
+    option_note = "同一轮持仓周期内的已平仓现股、期权和分红会回冲当前持仓成本；清仓归零前的历史收益不再滚入新一轮浮盈。卖出认沽按占用本金计入当前持仓市值和仓位，未录入本金时按 cash-secured 口径推导，covered call 不重复计入。"
     data["totals_note"] = option_note if not note else f"{note}；{option_note}"
     return data
